@@ -56,11 +56,21 @@ flutter pub get
 
 ---
 
+## A note on the examples
+
+> `SmartList` is **generic over any type `T`** — bring your own model class.
+> The examples below use `Post`, `Message`, `Product`, and `User` as stand-ins
+> for *your* domain types. Anywhere you see one of those, mentally substitute
+> your own class.
+
+---
+
 ## Quickstart — 2 lines, really
 
 ```dart
 import 'package:smart_list/smart_list.dart';
 
+// `Post` here is your own model class.
 final controller = SmartListController<Post>.simple(
   fetcher: (req) async => SmartListPage(items: await api.getPosts(req.page)),
 );
@@ -93,15 +103,15 @@ The fetcher receives the query through `req.query` — handle it however your AP
 
 ## Customising the UI
 
-Every state has a sensible default and is overridable:
+Every state has a sensible default and is overridable. (Example below uses `Product` — your own model class.)
 
 ```dart
-SmartListView<Post>(
+SmartListView<Product>(
   controller: controller,
-  itemBuilder: (_, post, __) => PostCard(post),
+  itemBuilder: (_, product, __) => ProductCard(product),
 
   loadingBuilder:    (_) => MyShimmerSkeleton(),
-  emptyBuilder:      (_) => Center(child: Text('No posts yet')),
+  emptyBuilder:      (_) => Center(child: Text('No products in stock')),
   searchEmptyBuilder:(_, q) => Text('Nothing matches "$q"'),
   errorBuilder:      (_, err, retry) => MyErrorWidget(err, onRetry: retry),
   loadingMoreBuilder:(_) => MySmallSpinner(),
@@ -115,7 +125,7 @@ SmartListView<Post>(
 Need *complete* control? Skip `SmartListView` and use the controller directly — it's a `ValueNotifier`, so it works with any UI you like:
 
 ```dart
-ValueListenableBuilder<SmartListState<Post>>(
+ValueListenableBuilder<SmartListState<Product>>(
   valueListenable: controller,
   builder: (context, state, _) {
     if (state.isInitialLoading) return MyCustomSkeleton();
@@ -132,21 +142,21 @@ Pick whichever your backend uses:
 
 ```dart
 // Page-based: ?page=1&size=20  (this is the default in `.simple`)
-PagePaginationStrategy<Post>(pageSize: 20)
+PagePaginationStrategy<MyItem>(pageSize: 20)
 
 // Cursor-based: ?cursor=xyz
-CursorPaginationStrategy<Post>(pageSize: 20)
+CursorPaginationStrategy<MyItem>(pageSize: 20)
 
 // Offset-based: ?offset=40&limit=20
-OffsetPaginationStrategy<Post>(pageSize: 20)
+OffsetPaginationStrategy<MyItem>(pageSize: 20)
 ```
 
 Use the full constructor when you want a non-default strategy:
 
 ```dart
-SmartListController<Post>(
+SmartListController<MyItem>(
   fetcher: api.fetch,
-  strategyBuilder: () => CursorPaginationStrategy<Post>(pageSize: 30),
+  strategyBuilder: () => CursorPaginationStrategy<MyItem>(pageSize: 30),
 );
 ```
 
@@ -157,10 +167,11 @@ SmartListController<Post>(
 Got a new chat message? An item that changed? Mutate the list directly — no refetch needed:
 
 ```dart
-controller.insertAtTop(message);
-controller.insertAtIndex(3, item);
-controller.updateWhere((p) => p.id == 7, (p) => p.copyWith(liked: true));
-controller.removeWhere((p) => p.archived);
+// In a chat screen with `SmartListController<Message>`:
+controller.insertAtTop(newMessage);
+controller.insertAtIndex(3, replyMessage);
+controller.updateWhere((m) => m.id == 7, (m) => m.copyWith(read: true));
+controller.removeWhere((m) => m.archived);
 ```
 
 ---
@@ -206,7 +217,8 @@ class HomeController extends GetxController {
 ```dart
 controller.loadInitial();            // first load (no-op if already loaded)
 controller.loadNextPage();           // fetch next page
-controller.refresh();                // pull-to-refresh
+controller.refresh();                // pull-to-refresh (skips cache by default)
+controller.refresh(bypassCache: false); // allow cache reuse on refresh
 controller.search('flutter');        // debounced search
 controller.clearSearch();            // restore pre-search list
 controller.applyFilters({...});      // change filters & refetch
