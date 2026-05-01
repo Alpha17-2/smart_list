@@ -13,11 +13,11 @@
 
 If you've ever built a list screen in Flutter, you've probably written the same boilerplate again and again:
 
-- "Load more when the user scrolls near the bottom…"
-- "Debounce the search box so we don't hit the API on every keystroke…"
-- "Show a spinner the first time, a small spinner at the bottom afterwards…"
-- "What if the user pulls to refresh while a search is loading?"
-- "What if a slow response comes back *after* a faster one?"
+- Load more when the user scrolls near the bottom.
+- Debounce the search box so we don't hit the API on every keystroke.
+- Show a spinner the first time, a small spinner at the bottom afterwards
+- What if the user pulls to refresh while a search is loading?
+- What if a slow response comes back *after* a faster one?
 
 Every list screen ends up reinventing this. **SmartList does it once, properly, and lets you focus on your UI.**
 
