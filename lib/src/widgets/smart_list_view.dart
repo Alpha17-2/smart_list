@@ -26,7 +26,7 @@ class SmartListView<T> extends StatefulWidget {
   final SmartListWidgetBuilder? emptyBuilder;
   final SmartListSearchEmptyBuilder? searchEmptyBuilder;
   final SmartListErrorBuilder? errorBuilder;
-  final SmartListFooterBuilder? footerBuilder;
+  final SmartListFooterBuilder<T>? footerBuilder;
 
   /// Whether to wrap the list in a [RefreshIndicator] for pull-to-refresh.
   final bool enableRefresh;
@@ -44,7 +44,9 @@ class SmartListView<T> extends StatefulWidget {
   /// the widget can respond to scroll notifications.
   final ScrollController? scrollController;
 
-  /// `true` to show the "loading more" footer even when the list is empty.
+  /// Whether the list is laid out and scrolled in reverse order — useful for
+  /// chat-style screens where the newest item sits at the bottom and earlier
+  /// items load by scrolling up. Forwarded directly to [ListView.reverse].
   final bool reverse;
 
   const SmartListView({
@@ -79,16 +81,36 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
   @override
   void initState() {
     super.initState();
-    // Kick off the first load on the next frame so the widget is mounted.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.controller.loadInitial();
-    });
+    _scheduleInitialLoad(widget.controller);
+  }
+
+  @override
+  void didUpdateWidget(covariant SmartListView<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Hosted controller swapped — kick off the new one's initial load.
+    // `loadInitial()` is a safe no-op when the new controller already has
+    // items, so it's fine to call unconditionally on identity change.
+    if (!identical(oldWidget.controller, widget.controller)) {
+      _scheduleInitialLoad(widget.controller);
+    }
   }
 
   @override
   void dispose() {
     _internalController?.dispose();
     super.dispose();
+  }
+
+  /// Schedule the initial load on the next frame, but only if this State is
+  /// still mounted *and* still bound to [target] when the callback fires.
+  /// Without these guards, dispose-then-fire or rapid controller swaps could
+  /// trigger fetches against a stale or unmounted widget.
+  void _scheduleInitialLoad(SmartListController<T> target) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!identical(widget.controller, target)) return;
+      target.loadInitial();
+    });
   }
 
   bool _onScrollNotification(ScrollNotification notification) {

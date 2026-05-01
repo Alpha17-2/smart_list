@@ -69,6 +69,12 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   final RequestToken _requestToken = RequestToken();
 
+  /// One-shot flag — when `true`, the next call to [_fetchNext] skips the
+  /// cache *read* (but still writes the fresh response). Set by [refresh] so
+  /// pull-to-refresh always reaches the network. Cleared after the fetch
+  /// consumes it, so subsequent paginations resume normal cache behaviour.
+  bool _bypassCacheReadOnce = false;
+
   bool _disposed = false;
 
   // ─── Construction ────────────────────────────────────────────────────────
@@ -138,8 +144,15 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   /// Pull-to-refresh — keeps existing items visible while the new first page
   /// is fetched, then atomically replaces.
-  Future<void> refresh() async {
+  ///
+  /// By default the cache *read* is bypassed (typical pull-to-refresh
+  /// expectation: always go to network). The fresh response is still
+  /// *written* to the cache, overwriting any stale entry. Pass
+  /// `bypassCache: false` to permit serving the refresh from cache —
+  /// useful for cheap "redo" calls where stale data is acceptable.
+  Future<void> refresh({bool bypassCache = true}) async {
     if (_disposed) return;
+    _bypassCacheReadOnce = bypassCache;
     await _startFetchSequence(reason: _FetchReason.refresh);
   }
 
@@ -329,8 +342,12 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       cursor: request.cursor,
     );
 
-    // Cache hit fast-path.
-    final cached = _useCache ? _cache?.read(cacheKey) : null;
+    // Cache hit fast-path. `_bypassCacheReadOnce` is consumed here so the
+    // bypass only applies to this single fetch; subsequent paginations
+    // resume using the cache normally.
+    final shouldReadCache = _useCache && !_bypassCacheReadOnce;
+    _bypassCacheReadOnce = false;
+    final cached = shouldReadCache ? _cache?.read(cacheKey) : null;
     if (cached != null) {
       _applyPage(
         cached,
@@ -410,13 +427,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   /// Merge new page items into existing items, deduplicating by [_uniqueKey]
   /// when configured. Preserves order: existing first, new appended.
   List<T> _mergeItems(List<T> existing, List<T> incoming) {
-    if (_uniqueKey == null) {
+    final extract = _uniqueKey;
+    if (extract == null) {
       return <T>[...existing, ...incoming];
     }
-    final seen = <Object>{for (final item in existing) _uniqueKey(item)};
+    final seen = <Object>{for (final item in existing) extract(item)};
     final out = <T>[...existing];
     for (final item in incoming) {
-      final key = _uniqueKey(item);
+      final key = extract(item);
       if (seen.add(key)) out.add(item);
     }
     return out;

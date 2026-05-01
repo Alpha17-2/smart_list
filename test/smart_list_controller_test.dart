@@ -262,6 +262,56 @@ void main() {
       expect(c.value.items, [1, 2, 3]);
       c.dispose();
     });
+
+    test('refresh() bypasses the cache by default', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
+        cache: MemoryCacheStore<int>(),
+      );
+      await c.loadInitial();
+      final after1 = src.callCount;
+      // Even though page-1 is cached, refresh must re-hit the network.
+      await c.refresh();
+      expect(src.callCount, greaterThan(after1),
+          reason: 'refresh must always reach the source by default');
+      c.dispose();
+    });
+
+    test('refresh(bypassCache: false) is allowed to use the cache', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
+        cache: MemoryCacheStore<int>(),
+      );
+      await c.loadInitial();
+      final after1 = src.callCount;
+      await c.refresh(bypassCache: false);
+      expect(src.callCount, after1,
+          reason: 'opt-out should re-use the cached page');
+      c.dispose();
+    });
+
+    test('refresh still updates the cache with the fresh response', () async {
+      final src = _FakeSource(totalItems: 3);
+      final cache = MemoryCacheStore<int>();
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
+        cache: cache,
+      );
+      await c.loadInitial();
+      await c.refresh(); // bypasses read but writes
+      // After refresh, cache should still have page 1 — verify by doing a
+      // non-bypassing reload and confirming the network was not hit.
+      final beforeReload = src.callCount;
+      await c.refresh(bypassCache: false);
+      expect(src.callCount, beforeReload,
+          reason: 'cache must have been refreshed by the prior refresh()');
+      c.dispose();
+    });
   });
 
   group('SmartListController — deduplication', () {

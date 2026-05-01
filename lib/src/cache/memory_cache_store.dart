@@ -6,8 +6,6 @@ class _CacheEntry<T> {
   final SmartListPage<T> page;
   final DateTime expiresAt;
   _CacheEntry(this.page, this.expiresAt);
-
-  bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
 
 /// Simple in-memory cache store with TTL-based invalidation and an optional

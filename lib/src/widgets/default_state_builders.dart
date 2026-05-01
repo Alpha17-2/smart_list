@@ -102,7 +102,10 @@ typedef SmartListSearchEmptyBuilder = Widget Function(
 
 /// Footer builder for the bottom of the list — typically used to show the
 /// "loading more" indicator or an "end of list" sentinel.
-typedef SmartListFooterBuilder = Widget Function(
+///
+/// Generic over the item type [T] so callers retain `List<T>` typing on
+/// `state.items` rather than collapsing to `List<dynamic>`.
+typedef SmartListFooterBuilder<T> = Widget Function(
   BuildContext context,
-  SmartListState<dynamic> state,
+  SmartListState<T> state,
 );
