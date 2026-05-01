@@ -1,7 +1,9 @@
 name: smart_list
 description: "**SmartList** is a Flutter package that provides a unified, production-ready abstraction for handling lists in mobile applications. The package eliminates repetitive boilerplate and ensures consistent UX and performance across applications."
 version: 0.0.1
-homepage:
+homepage: https://github.com/Alpha17-2/smart_list
+repository: https://github.com/Alpha17-2/smart_list
+issue_tracker: https://github.com/Alpha17-2/smart_list/issues
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
