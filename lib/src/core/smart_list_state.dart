@@ -53,8 +53,7 @@ class SmartListState<T> {
   // ─── Derived booleans ────────────────────────────────────────────────────
 
   /// First-page load with no items yet visible.
-  bool get isInitialLoading =>
-      phase == SmartListPhase.loading && items.isEmpty;
+  bool get isInitialLoading => phase == SmartListPhase.loading && items.isEmpty;
 
   /// A subsequent-page fetch is in flight.
   bool get isLoadingMore => phase == SmartListPhase.loadingMore;
@@ -105,8 +104,7 @@ class SmartListState<T> {
       items: items ?? this.items,
       phase: phase ?? this.phase,
       error: clearError ? null : (error ?? this.error),
-      stackTrace:
-          clearStackTrace ? null : (stackTrace ?? this.stackTrace),
+      stackTrace: clearStackTrace ? null : (stackTrace ?? this.stackTrace),
       hasReachedEnd: hasReachedEnd ?? this.hasReachedEnd,
       query: clearQuery ? null : (query ?? this.query),
       filters: filters ?? this.filters,
@@ -139,8 +137,7 @@ class SmartListState<T> {
       );
 
   @override
-  String toString() =>
-      'SmartListState(phase: $phase, items: ${items.length}, '
+  String toString() => 'SmartListState(phase: $phase, items: ${items.length}, '
       'hasReachedEnd: $hasReachedEnd, query: $query, '
       'filters: $filters, error: $error)';
 }

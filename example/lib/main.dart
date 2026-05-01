@@ -147,7 +147,8 @@ class _PostsPageState extends State<PostsPage> {
         itemBuilder: (_, post, __) => ListTile(
           leading: CircleAvatar(child: Text('${post.id}')),
           title: Text(post.title),
-          subtitle: Text(post.body, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle:
+              Text(post.body, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
       ),
     );

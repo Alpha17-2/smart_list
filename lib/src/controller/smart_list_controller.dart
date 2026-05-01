@@ -280,7 +280,8 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   Future<void> _startFetchSequence({required _FetchReason reason}) async {
     final keepItems = reason == _FetchReason.refresh && value.items.isNotEmpty;
-    final phase = keepItems ? SmartListPhase.refreshing : SmartListPhase.loading;
+    final phase =
+        keepItems ? SmartListPhase.refreshing : SmartListPhase.loading;
 
     if (value.isSearchActive) {
       _searchStrategy?.reset();

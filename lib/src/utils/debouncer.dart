@@ -7,9 +7,12 @@ import 'dart:async';
 ///
 /// Each call to [run] cancels the previous pending call.
 class Debouncer {
+  /// Delay applied to each scheduled action before it fires.
   final Duration delay;
   Timer? _timer;
 
+  /// Create a debouncer that waits [delay] (default 300 ms) between the most
+  /// recent [run] call and the eventual invocation of the action.
   Debouncer({this.delay = const Duration(milliseconds: 300)});
 
   /// Schedule [action] to run after [delay], cancelling any previously

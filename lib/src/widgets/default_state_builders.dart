@@ -26,6 +26,7 @@ typedef SmartListSeparatorBuilder = Widget Function(
 class DefaultSmartListStates {
   DefaultSmartListStates._();
 
+  /// Default first-load spinner — a centred [CircularProgressIndicator].
   static Widget loading(BuildContext context) {
     return const Center(
       child: Padding(
@@ -35,6 +36,8 @@ class DefaultSmartListStates {
     );
   }
 
+  /// Default "loading more" footer — a small spinner shown while a
+  /// subsequent page is being fetched.
   static Widget loadingMore(BuildContext context) {
     return const Padding(
       padding: EdgeInsets.symmetric(vertical: 16),
@@ -48,6 +51,7 @@ class DefaultSmartListStates {
     );
   }
 
+  /// Default empty-state widget — a centred "No items" label.
   static Widget empty(BuildContext context) {
     return const Center(
       child: Padding(
@@ -57,6 +61,8 @@ class DefaultSmartListStates {
     );
   }
 
+  /// Default search-empty widget — a centred "No results for ..." label
+  /// that interpolates the active [query].
   static Widget searchEmpty(BuildContext context, String query) {
     return Center(
       child: Padding(
@@ -66,6 +72,8 @@ class DefaultSmartListStates {
     );
   }
 
+  /// Default error widget — shows the [error] message and a retry button
+  /// that invokes [retry] when tapped.
   static Widget error(
     BuildContext context,
     Object error,

@@ -1,9 +1,16 @@
 name: smart_list
-description: "**SmartList** is a Flutter package that provides a unified, production-ready abstraction for handling lists in mobile applications. The package eliminates repetitive boilerplate and ensures consistent UX and performance across applications."
+description: "Production-ready paginated lists for Flutter: search, pull-to-refresh, caching, retries, and customisable UI states — wired up in two lines."
 version: 0.0.1
 homepage: https://github.com/Alpha17-2/smart_list
 repository: https://github.com/Alpha17-2/smart_list
 issue_tracker: https://github.com/Alpha17-2/smart_list/issues
+
+topics:
+  - pagination
+  - infinite-scroll
+  - flutter-list
+  - listview
+  - search
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

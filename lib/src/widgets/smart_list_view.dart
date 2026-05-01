@@ -144,8 +144,8 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
             retry,
           );
         } else if (state.isSearchEmpty) {
-          child = (widget.searchEmptyBuilder ??
-              DefaultSmartListStates.searchEmpty)(
+          child =
+              (widget.searchEmptyBuilder ?? DefaultSmartListStates.searchEmpty)(
             context,
             state.query!,
           );
