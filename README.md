@@ -1,39 +1,275 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# SmartList
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
+> A Flutter package that takes the headache out of building lists.
+> Pagination, search, pull-to-refresh, caching, retries, and clean loading/error states — all wired up for you in two lines of code.
 
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
+[![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-02569B?logo=flutter)](https://flutter.dev)
+[![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart)](https://dart.dev)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)]()
 
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+---
 
-## Features
+## Why SmartList?
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+If you've ever built a list screen in Flutter, you've probably written the same boilerplate again and again:
 
-## Getting started
+- "Load more when the user scrolls near the bottom…"
+- "Debounce the search box so we don't hit the API on every keystroke…"
+- "Show a spinner the first time, a small spinner at the bottom afterwards…"
+- "What if the user pulls to refresh while a search is loading?"
+- "What if a slow response comes back *after* a faster one?"
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+Every list screen ends up reinventing this. **SmartList does it once, properly, and lets you focus on your UI.**
 
-## Usage
+---
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder.
+## What you get
 
-```dart
-const like = 'sample';
+| Feature | What it means |
+|---|---|
+| 📄 **Pagination** | Page-based, cursor-based, or offset-based — pick one, swap any time |
+| 🔍 **Search** | Built-in debouncing, automatic cancellation, restores previous list when you clear |
+| ⬇️ **Pull-to-refresh** | One flag — `enableRefresh: true` |
+| 🎨 **UI states** | Loading, empty, error, search-empty — all customisable, sensible defaults out of the box |
+| 💾 **Caching** | In-memory cache with TTL & LRU; pluggable for disk caches later |
+| 🔁 **Auto-retry** | Configurable exponential backoff with jitter |
+| 🛡️ **Race-safe** | Old responses can never overwrite newer ones |
+| 🧹 **No duplicates** | Optional `uniqueKey` collapses duplicates across pages |
+| 🪶 **Tiny** | One dependency: Flutter itself. No third-party state-management library required |
+
+---
+
+## Installation
+
+Add to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  smart_list: ^0.0.1
 ```
 
-## Additional information
+Then run:
 
-TODO: Tell users more about the package: where to find more information, how to
-contribute to the package, how to file issues, what response they can expect
-from the package authors, and more.
+```bash
+flutter pub get
+```
+
+---
+
+## Quickstart — 2 lines, really
+
+```dart
+import 'package:smart_list/smart_list.dart';
+
+final controller = SmartListController<Post>.simple(
+  fetcher: (req) async => SmartListPage(items: await api.getPosts(req.page)),
+);
+
+SmartListView<Post>(
+  controller: controller,
+  itemBuilder: (context, post, index) => ListTile(title: Text(post.title)),
+);
+```
+
+That's it. You now have a list with infinite scroll, pull-to-refresh, loading/empty/error states, and caching.
+
+---
+
+## Adding search
+
+```dart
+TextField(
+  onChanged: controller.search,        // built-in debounce
+  decoration: InputDecoration(hintText: 'Search…'),
+);
+
+// Anywhere later:
+controller.clearSearch();              // restores the original list
+```
+
+The fetcher receives the query through `req.query` — handle it however your API expects.
+
+---
+
+## Customising the UI
+
+Every state has a sensible default and is overridable:
+
+```dart
+SmartListView<Post>(
+  controller: controller,
+  itemBuilder: (_, post, __) => PostCard(post),
+
+  loadingBuilder:    (_) => MyShimmerSkeleton(),
+  emptyBuilder:      (_) => Center(child: Text('No posts yet')),
+  searchEmptyBuilder:(_, q) => Text('Nothing matches "$q"'),
+  errorBuilder:      (_, err, retry) => MyErrorWidget(err, onRetry: retry),
+  loadingMoreBuilder:(_) => MySmallSpinner(),
+
+  separatorBuilder: (_, __) => const Divider(height: 1),
+  loadMoreThreshold: 300,                // start prefetching 300px before the bottom
+  enableRefresh: true,
+);
+```
+
+Need *complete* control? Skip `SmartListView` and use the controller directly — it's a `ValueNotifier`, so it works with any UI you like:
+
+```dart
+ValueListenableBuilder<SmartListState<Post>>(
+  valueListenable: controller,
+  builder: (context, state, _) {
+    if (state.isInitialLoading) return MyCustomSkeleton();
+    return CustomScrollView(slivers: [...]);
+  },
+);
+```
+
+---
+
+## Pagination styles
+
+Pick whichever your backend uses:
+
+```dart
+// Page-based: ?page=1&size=20  (this is the default in `.simple`)
+PagePaginationStrategy<Post>(pageSize: 20)
+
+// Cursor-based: ?cursor=xyz
+CursorPaginationStrategy<Post>(pageSize: 20)
+
+// Offset-based: ?offset=40&limit=20
+OffsetPaginationStrategy<Post>(pageSize: 20)
+```
+
+Use the full constructor when you want a non-default strategy:
+
+```dart
+SmartListController<Post>(
+  fetcher: api.fetch,
+  strategyBuilder: () => CursorPaginationStrategy<Post>(pageSize: 30),
+);
+```
+
+---
+
+## Real-time updates
+
+Got a new chat message? An item that changed? Mutate the list directly — no refetch needed:
+
+```dart
+controller.insertAtTop(message);
+controller.insertAtIndex(3, item);
+controller.updateWhere((p) => p.id == 7, (p) => p.copyWith(liked: true));
+controller.removeWhere((p) => p.archived);
+```
+
+---
+
+## Filters
+
+Re-fetch with new filters in one call:
+
+```dart
+controller.applyFilters({'status': 'open', 'category': 'food'});
+```
+
+Pass an empty map to clear them. The fetcher gets them through `req.filters`.
+
+---
+
+## Plays well with every state-management library
+
+`SmartListController` is a plain `ValueNotifier` — Provider, Riverpod, GetX, BLoC, and `setState` all consume it without an adapter. The only rule: dispose it when its scope dies.
+
+```dart
+// Provider
+ChangeNotifierProvider(create: (_) => SmartListController.simple(...));
+
+// Riverpod
+final ctrlProvider = Provider.autoDispose((ref) {
+  final c = SmartListController.simple(...);
+  ref.onDispose(c.dispose);
+  return c;
+});
+
+// GetX
+class HomeController extends GetxController {
+  final list = SmartListController.simple(...);
+  @override void onClose() { list.dispose(); super.onClose(); }
+}
+```
+
+---
+
+## What the controller exposes
+
+```dart
+controller.loadInitial();            // first load (no-op if already loaded)
+controller.loadNextPage();           // fetch next page
+controller.refresh();                // pull-to-refresh
+controller.search('flutter');        // debounced search
+controller.clearSearch();            // restore pre-search list
+controller.applyFilters({...});      // change filters & refetch
+controller.insertAtTop(item);
+controller.insertAtIndex(i, item);
+controller.updateWhere(test, fn);
+controller.removeWhere(test);
+controller.reset();                  // wipe state
+controller.clearCache();
+controller.value;                    // current SmartListState<T>
+controller.addListener(() => …);     // it's a ChangeNotifier
+```
+
+---
+
+## The state object
+
+`SmartListState<T>` is what your UI reacts to:
+
+```dart
+state.items           // List<T> — what to render
+state.phase           // SmartListPhase — initial / loading / loadingMore / refreshing / success / error
+state.isInitialLoading
+state.isLoadingMore
+state.isRefreshing
+state.hasError
+state.error           // Object?
+state.isEmpty
+state.isSearchActive
+state.isSearchEmpty
+state.hasReachedEnd
+state.query           // active search query
+state.filters
+```
+
+It's immutable — every change produces a new instance. Equality is value-based, so you can drop it straight into `BlocBuilder`, `Selector`, etc.
+
+---
+
+## Try the example
+
+A full working demo lives in `example/`:
+
+```bash
+cd example
+flutter run
+```
+
+It shows: pagination, debounced search, pull-to-refresh, simulated network errors with auto-retry, and a custom empty state.
+
+---
+
+## Roadmap
+
+- [ ] Disk cache implementation (Hive / SQLite)
+- [ ] Sliver-native variant for `CustomScrollView` integrators
+- [ ] Hybrid local + remote search
+- [ ] Flutter DevTools timeline integration
+
+PRs welcome.
+
+---
+
+## License
+
+MIT — use it freely in commercial and open-source projects.
