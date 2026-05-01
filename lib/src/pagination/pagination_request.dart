@@ -38,7 +38,6 @@ class SmartListPageRequest {
   });
 
   @override
-  String toString() =>
-      'SmartListPageRequest(page: $page, pageSize: $pageSize, '
+  String toString() => 'SmartListPageRequest(page: $page, pageSize: $pageSize, '
       'cursor: $cursor, offset: $offset, query: $query, filters: $filters)';
 }

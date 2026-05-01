@@ -11,6 +11,7 @@ class CursorPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   String? _nextCursor;
   int _nextPage = 1;
 
+  /// Create a cursor strategy with the given [pageSize] hint (default 20).
   CursorPaginationStrategy({this.pageSize = 20});
 
   @override
