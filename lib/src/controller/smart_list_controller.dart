@@ -67,7 +67,18 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   SmartListPage<T>? _lastNormalPage;
   SmartListPage<T>? _lastSearchPage;
 
+  /// Persistent dedupe set per phase. Keyed by [_uniqueKey] outputs so that
+  /// appending a page costs O(M) (new items) instead of O(N + M) (rebuild
+  /// from existing items). Null when [_uniqueKey] is not configured.
+  Set<Object>? _normalSeen;
+  Set<Object>? _searchSeen;
+
   final RequestToken _requestToken = RequestToken();
+
+  /// Serializes pagination so two `loadNextPage()` calls that slip past the
+  /// `isBusy` snapshot (e.g. across microtasks before state propagates)
+  /// cannot both append a page. The second call awaits the first's result.
+  Future<void>? _paginationLock;
 
   bool _disposed = false;
 
@@ -122,18 +133,39 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     await _startFetchSequence(reason: _FetchReason.initial);
   }
 
-  /// Fetch the next page. No-op if a fetch is already in flight, the list
-  /// has reached its end, or no initial load has happened yet.
+  /// Fetch the next page. No-op if the list has reached its end or no
+  /// initial load has happened yet. Concurrent callers serialize on an
+  /// internal lock — the second call awaits the first's result and then
+  /// returns (without firing a second fetch), so a flurry of scroll
+  /// notifications cannot append the same page twice.
   Future<void> loadNextPage() async {
     if (_disposed) return;
+
+    // If a pagination is already in flight, await it and return. We do not
+    // chain a second fetch — by the time the first finishes, the caller's
+    // intent ("get the next page") has already been satisfied.
+    final inflight = _paginationLock;
+    if (inflight != null) {
+      await inflight;
+      return;
+    }
+
     final s = value;
-    if (s.isBusy) return;
     if (s.hasReachedEnd) return;
     if (s.phase == SmartListPhase.initial) {
       // Treat this as the initial load.
       return loadInitial();
     }
-    await _fetchNext();
+    if (s.isBusy) return;
+
+    final completer = Completer<void>();
+    _paginationLock = completer.future;
+    try {
+      await _fetchNext();
+    } finally {
+      _paginationLock = null;
+      completer.complete();
+    }
   }
 
   /// Pull-to-refresh — keeps existing items visible while the new first page
@@ -166,6 +198,13 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   /// Cancel any in-flight search, restore the pre-search items, and resume
   /// normal browsing from where it left off.
+  ///
+  /// "Where it left off" is taken from the snapshot captured when the search
+  /// began — `_lastNormalPage`, `hasReachedEnd`, and the items list are all
+  /// restored. The next `loadNextPage()` continues from the page index the
+  /// user was on before searching. If the underlying data may have changed
+  /// since (e.g. minutes elapsed, server-side mutations), call `refresh()`
+  /// after `clearSearch()` to pick up the latest state.
   void clearSearch() {
     if (_disposed) return;
     _searchDebouncer.cancel();
@@ -180,6 +219,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     _preSearchHasReachedEnd = null;
     _searchStrategy = null;
     _lastSearchPage = null;
+    _searchSeen = null;
 
     value = value.copyWith(
       items: List<T>.unmodifiable(restoredItems),
@@ -191,7 +231,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     );
   }
 
-  /// Replace filters and re-fetch from page 1. Pass an empty map to clear.
+  /// Replace filters and re-fetch from page 1.
+  ///
+  /// Pass an empty map to clear any previously-applied filters and re-fetch
+  /// the unfiltered list. This is a no-op when the supplied filters are
+  /// already current — e.g. calling `applyFilters({})` when no filters were
+  /// ever set produces no notifications and no fetch. Use [reset] instead
+  /// if you want to unconditionally drop all in-memory state and start
+  /// from `initial`.
   Future<void> applyFilters(Map<String, dynamic> filters) async {
     if (_disposed) return;
     if (mapEquals(filters, value.filters)) return;
@@ -251,6 +298,8 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     _preSearchHasReachedEnd = null;
     _lastNormalPage = null;
     _lastSearchPage = null;
+    _normalSeen = null;
+    _searchSeen = null;
     value = SmartListState<T>.initial();
   }
 
@@ -387,7 +436,10 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       );
 
       if (!_requestToken.isCurrent(token)) {
-        // Superseded by a newer request; discard silently.
+        // Superseded by a newer request; discard silently. The cache write
+        // is intentionally skipped too — there's a newer in-flight request
+        // for the same key whose response should be the canonical one,
+        // so writing this stale response would risk serving it later.
         return;
       }
 
@@ -428,9 +480,17 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
     // First page of a fresh sequence (initial / refresh / new search) atomically
     // replaces the visible list. Subsequent pages append (with dedupe).
+    if (replace) {
+      // Reset the dedupe set for this phase so the new sequence starts fresh.
+      if (isSearch) {
+        _searchSeen = _uniqueKey == null ? null : <Object>{};
+      } else {
+        _normalSeen = _uniqueKey == null ? null : <Object>{};
+      }
+    }
     final merged = replace
-        ? _mergeItems(const [], page.items)
-        : _mergeItems(value.items, page.items);
+        ? _mergeItems(const [], page.items, isSearch: isSearch)
+        : _mergeItems(value.items, page.items, isSearch: isSearch);
 
     value = value.copyWith(
       items: List<T>.unmodifiable(merged),
@@ -444,16 +504,24 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   /// Merge new page items into existing items, deduplicating by [_uniqueKey]
   /// when configured. Preserves order: existing first, new appended.
-  List<T> _mergeItems(List<T> existing, List<T> incoming) {
+  ///
+  /// Walks only the [incoming] items (O(M)) — the seen-set is persisted on
+  /// the controller per phase, so we don't rebuild it from [existing] on
+  /// every page. Callers must reset the appropriate seen-set when starting
+  /// a fresh sequence (initial / refresh / new search).
+  List<T> _mergeItems(
+    List<T> existing,
+    List<T> incoming, {
+    required bool isSearch,
+  }) {
     final extract = _uniqueKey;
     if (extract == null) {
       return <T>[...existing, ...incoming];
     }
-    final seen = <Object>{for (final item in existing) extract(item)};
+    final seen = isSearch ? _searchSeen! : _normalSeen!;
     final out = <T>[...existing];
     for (final item in incoming) {
-      final key = extract(item);
-      if (seen.add(key)) out.add(item);
+      if (seen.add(extract(item))) out.add(item);
     }
     return out;
   }

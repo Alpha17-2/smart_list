@@ -544,6 +544,78 @@ void main() {
     });
   });
 
+  group('SmartListController — pagination serialization (#11)', () {
+    test('concurrent loadNextPage calls do not double-append', () async {
+      // Slow fetcher so we can fire many concurrent calls while the first
+      // is still in flight — pre-fix, the token-check let them all run
+      // and append duplicate pages.
+      final src = _FakeSource(totalItems: 6);
+      src.latency = const Duration(milliseconds: 40);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 3,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+
+      // Fire five concurrent loadNextPage calls. With the lock, only one
+      // hits the network and the others await its result.
+      final hitsBefore = src.callCount;
+      await Future.wait(List.generate(5, (_) => c.loadNextPage()));
+
+      // Exactly one network call must have fired for page 2.
+      expect(src.callCount - hitsBefore, 1);
+      expect(c.value.items, [1, 2, 3, 4, 5, 6]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — dedupe seen-set (#24)', () {
+    test('seen-set survives across pages with uniqueKey', () async {
+      // Same dedupe contract as before — just verifies the persisted
+      // seen-set still produces correct output after multiple appends.
+      var page = 0;
+      Future<SmartListPage<int>> src(SmartListPageRequest req) async {
+        page++;
+        if (page == 1) return const SmartListPage(items: [1, 2, 3], hasMore: true);
+        if (page == 2) return const SmartListPage(items: [3, 4, 5], hasMore: true);
+        return const SmartListPage(items: [5, 6], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
+        uniqueKey: (i) => i,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      await c.loadNextPage();
+      await c.loadNextPage();
+      expect(c.value.items, [1, 2, 3, 4, 5, 6]);
+      c.dispose();
+    });
+
+    test('refresh resets the seen-set (no cross-sequence leakage)', () async {
+      // After refresh, the same items must be allowed back in — the seen
+      // set from the prior sequence cannot suppress them.
+      Future<SmartListPage<int>> src(SmartListPageRequest req) async =>
+          const SmartListPage(items: [1, 2, 3], hasMore: false);
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
+        uniqueKey: (i) => i,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+      await c.refresh();
+      expect(c.value.items, [1, 2, 3]);
+      c.dispose();
+    });
+  });
+
   group('SmartListController — disposal', () {
     test('post-dispose calls are silent no-ops', () async {
       final src = _FakeSource(totalItems: 3);
