@@ -196,7 +196,11 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
         reverse: widget.reverse,
         itemCount: itemCount,
         separatorBuilder: (context, index) {
-          if (index >= state.items.length - 1) return const SizedBox.shrink();
+          // Suppress only the separator between the last real item and the
+          // footer slot. `index == items.length - 1` is the gap that sits
+          // *before* the footer; every smaller index is a gap between two
+          // real items and should render normally.
+          if (index == state.items.length - 1) return const SizedBox.shrink();
           return widget.separatorBuilder?.call(context, index) ??
               const SizedBox.shrink();
         },

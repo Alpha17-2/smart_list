@@ -135,4 +135,42 @@ void main() {
     expect(find.text('No results for "zzz"'), findsOneWidget);
     c.dispose();
   });
+
+  testWidgets('separator renders between every adjacent pair (regression #8)',
+      (tester) async {
+    Future<SmartListPage<int>> src(SmartListPageRequest _) async =>
+        const SmartListPage(items: [1, 2, 3], hasMore: false);
+
+    final c = SmartListController<int>.simple(
+      fetcher: src,
+      pageSize: 10,
+      enableCache: false,
+    );
+
+    await tester.pumpWidget(
+      _wrap(SmartListView<int>(
+        controller: c,
+        itemBuilder: (_, item, __) => SizedBox(
+          height: 48,
+          child: Text('item-$item'),
+        ),
+        separatorBuilder: (_, index) => Container(
+          key: ValueKey('sep-$index'),
+          height: 1,
+          color: const Color(0xFF000000),
+        ),
+      )),
+    );
+    await tester.pumpAndSettle();
+
+    // For 3 items + 1 footer slot, ListView.separated calls the separator
+    // builder for indices 0..items.length-1 = 0..2. We want separators
+    // between item 0–1 and 1–2 (indices 0 and 1), but NOT between item 2
+    // and the footer (index 2). The pre-fix code suppressed indices 1 and
+    // 2, losing the divider between items 1 and 2.
+    expect(find.byKey(const ValueKey('sep-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sep-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sep-2')), findsNothing);
+    c.dispose();
+  });
 }

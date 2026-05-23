@@ -279,6 +279,11 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   }
 
   Future<void> _startFetchSequence({required _FetchReason reason}) async {
+    // Supersede any pending debounced search — without this, a search queued
+    // moments before a refresh / loadInitial(force) / applyFilters could fire
+    // after the reset and silently put the controller back into search mode.
+    _searchDebouncer.cancel();
+
     final keepItems = reason == _FetchReason.refresh && value.items.isNotEmpty;
     final phase =
         keepItems ? SmartListPhase.refreshing : SmartListPhase.loading;
@@ -363,10 +368,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       final page = await _retryPolicy.run<SmartListPage<T>>(
         () => _fetcher(request),
         onRetry: (attempt, _) {
-          if (_requestToken.isCurrent(token)) {
-            value = value.copyWith(retryAttempt: attempt);
-          }
+          // Guard against post-dispose mutations and stale-token retries —
+          // either would crash on a disposed ValueNotifier or stomp on a
+          // newer request's state.
+          if (_disposed) return;
+          if (!_requestToken.isCurrent(token)) return;
+          value = value.copyWith(retryAttempt: attempt);
         },
+        shouldContinue: () => !_disposed && _requestToken.isCurrent(token),
       );
 
       if (!_requestToken.isCurrent(token)) {
