@@ -77,13 +77,11 @@ searchable, cached lists in Flutter.
 - Comprehensive Dart-doc comments on every public symbol.
 - `README.md` with quickstart, customisation guide, pagination styles,
   state-management interop examples, and full API reference.
-- `LLD.md` — low-level design document covering architecture, sequence
-  diagrams, edge-case handling, and extension points.
 - `example/` app demonstrating pagination, debounced search,
   pull-to-refresh, simulated transient failures with auto-retry, and a
   custom empty-state builder.
 
 #### Testing
-- 56 tests covering controller flow, pagination strategies, cache
+- Tests covering controller flow, pagination strategies, cache
   semantics, debouncer, retry policy, request token, state derivations,
   and widget UI states.

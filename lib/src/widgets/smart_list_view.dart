@@ -26,6 +26,14 @@ class SmartListView<T> extends StatefulWidget {
   final SmartListWidgetBuilder? emptyBuilder;
   final SmartListSearchEmptyBuilder? searchEmptyBuilder;
   final SmartListErrorBuilder? errorBuilder;
+
+  /// Builder for the *inline* footer shown when a subsequent-page fetch
+  /// fails (the first page already loaded — items are visible). When `null`,
+  /// the default compact "Failed to load more / Retry" row is used.
+  /// This is intentionally separate from [errorBuilder], which is the
+  /// full-screen fallback shown when the first page fails with no items.
+  final SmartListErrorBuilder? loadMoreErrorBuilder;
+
   final SmartListFooterBuilder<T>? footerBuilder;
 
   /// Whether to wrap the list in a [RefreshIndicator] for pull-to-refresh.
@@ -59,6 +67,7 @@ class SmartListView<T> extends StatefulWidget {
     this.emptyBuilder,
     this.searchEmptyBuilder,
     this.errorBuilder,
+    this.loadMoreErrorBuilder,
     this.footerBuilder,
     this.enableRefresh = true,
     this.loadMoreThreshold = 240,
@@ -74,9 +83,15 @@ class SmartListView<T> extends StatefulWidget {
 
 class _SmartListViewState<T> extends State<SmartListView<T>> {
   ScrollController? _internalController;
+  bool _disposed = false;
 
-  ScrollController get _controller =>
-      widget.scrollController ?? (_internalController ??= ScrollController());
+  ScrollController? get _controller {
+    if (widget.scrollController != null) return widget.scrollController;
+    // After dispose, do not resurrect a fresh ScrollController — it would
+    // leak (we'll never dispose it) and indicates a stale callback.
+    if (_disposed) return null;
+    return _internalController ??= ScrollController();
+  }
 
   @override
   void initState() {
@@ -97,6 +112,7 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
 
   @override
   void dispose() {
+    _disposed = true;
     _internalController?.dispose();
     super.dispose();
   }
@@ -129,11 +145,17 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
       valueListenable: widget.controller,
       builder: (context, state, _) {
         Widget child;
+        // Non-list states (loading/error/empty) are centred widgets and are
+        // not inherently scrollable. When refresh is enabled, they need to
+        // live inside an always-scrollable viewport so the pull-to-refresh
+        // gesture has something to grab. `isPlaceholder` flags those cases.
+        bool isPlaceholder = false;
 
         if (state.isInitialLoading) {
           child = (widget.loadingBuilder ?? DefaultSmartListStates.loading)(
             context,
           );
+          isPlaceholder = true;
         } else if (state.hasError && state.items.isEmpty) {
           final retry = state.isSearchActive
               ? () => widget.controller.search(state.query!)
@@ -143,21 +165,46 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
             state.error ?? 'Unknown error',
             retry,
           );
+          isPlaceholder = true;
         } else if (state.isSearchEmpty) {
           child =
               (widget.searchEmptyBuilder ?? DefaultSmartListStates.searchEmpty)(
             context,
             state.query!,
           );
+          isPlaceholder = true;
         } else if (state.isEmpty) {
           child = (widget.emptyBuilder ?? DefaultSmartListStates.empty)(
             context,
           );
+          isPlaceholder = true;
         } else {
           child = _buildList(context, state);
         }
 
         if (!widget.enableRefresh) return child;
+
+        if (isPlaceholder) {
+          // Wrap the placeholder in a viewport-sized scrollable so the pull
+          // gesture is always available — even on error/empty/initial-loading
+          // where the content itself is just a centred widget. A `ListView`
+          // with one viewport-tall child keeps every internal box bounded
+          // and avoids 'Center forces an infinite height' under
+          // `SingleChildScrollView`.
+          final placeholder = child;
+          child = LayoutBuilder(
+            builder: (context, constraints) => ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: constraints.maxHeight,
+                  child: placeholder,
+                ),
+              ],
+            ),
+          );
+        }
+
         return RefreshIndicator(
           onRefresh: widget.controller.refresh,
           child: child,
@@ -175,7 +222,11 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
             DefaultSmartListStates.loadingMore)(context);
       }
       if (state.hasError) {
-        return (widget.errorBuilder ?? DefaultSmartListStates.error)(
+        // A *pagination* error: items are visible, only the next page failed.
+        // Use the compact inline builder (or the user's override) so we don't
+        // dump a full-screen error widget at the bottom of the list.
+        return (widget.loadMoreErrorBuilder ??
+            DefaultSmartListStates.loadMoreError)(
           context,
           state.error ?? 'Unknown error',
           widget.controller.loadNextPage,

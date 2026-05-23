@@ -29,11 +29,20 @@ void main() {
       });
     });
 
-    test('zero delay fires synchronously', () {
-      final d = Debouncer(delay: Duration.zero);
-      var fired = false;
-      d.run(() => fired = true);
-      expect(fired, isTrue);
+    test('zero delay still defers to the next microtask (#19)', () {
+      // Pre-fix: Duration.zero fired the action synchronously, which made
+      // it unsafe to call `debouncer.run` from inside a Flutter build —
+      // any state mutation would trigger 'setState called during build'.
+      // Post-fix: even a zero delay schedules through a Timer.
+      fakeAsync((async) {
+        final d = Debouncer(delay: Duration.zero);
+        var fired = false;
+        d.run(() => fired = true);
+        expect(fired, isFalse, reason: 'must not run synchronously');
+        async.elapse(const Duration(milliseconds: 1));
+        expect(fired, isTrue);
+        d.dispose();
+      });
     });
   });
 
