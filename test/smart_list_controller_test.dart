@@ -382,6 +382,86 @@ void main() {
     });
   });
 
+  group('SmartListController — debounce cancellation (#9)', () {
+    test('loadInitial(force) cancels a pending debounced search', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: const Duration(milliseconds: 50),
+        enableCache: false,
+      );
+      await c.loadInitial();
+
+      // Queue a debounced search, then immediately force-reload before the
+      // debounce window elapses. The pending search must not fire afterwards.
+      c.search('1');
+      await c.loadInitial(force: true);
+
+      // Wait past the debounce window to make sure no late search fires.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(c.value.isSearchActive, isFalse);
+      expect(c.value.query, isNull);
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+      c.dispose();
+    });
+
+    test('refresh cancels a pending debounced search', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: const Duration(milliseconds: 50),
+        enableCache: false,
+      );
+      await c.loadInitial();
+
+      c.search('1');
+      await c.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(c.value.isSearchActive, isFalse);
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — retry cancellation (#6)', () {
+    test('disposing the controller mid-retry aborts the chain cleanly',
+        () async {
+      final src = _FakeSource(totalItems: 5);
+      src.failuresLeft = 10;
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
+        retryPolicy: RetryPolicy(
+          maxAttempts: 10,
+          baseDelay: const Duration(milliseconds: 30),
+        ),
+      );
+
+      final loadFuture = c.loadInitial();
+      // Allow the first failure to land and a retry to be scheduled.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      c.dispose();
+
+      // Awaiting after dispose must not throw 'used after disposed'.
+      await loadFuture;
+
+      // Give any further (now-cancelled) retries time to *not* fire.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      // No assertion on internal state — passing without throwing is the
+      // contract.
+    });
+  });
+
   group('SmartListController — disposal', () {
     test('post-dispose calls are silent no-ops', () async {
       final src = _FakeSource(totalItems: 3);

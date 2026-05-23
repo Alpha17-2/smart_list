@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import '../core/smart_list_exception.dart';
+
 /// Decides whether a thrown error is worth retrying, and with what backoff.
 ///
 /// Default behaviour: up to 3 attempts (initial + 2 retries), exponential
@@ -46,17 +48,31 @@ class RetryPolicy {
   /// Run [action] under this retry policy. Calls [onRetry] before each retry
   /// attempt (1-based attempt counter) so the controller can surface retry
   /// state to the UI.
+  ///
+  /// If [shouldContinue] is supplied, it is consulted before every attempt
+  /// and again after each backoff sleep. Returning `false` aborts the loop
+  /// with a [SmartListCancelledException] instead of retrying — this lets
+  /// callers cancel an in-flight retry chain when the request is superseded
+  /// or the owning controller is disposed.
   Future<R> run<R>(
     Future<R> Function() action, {
     void Function(int attempt, Object error)? onRetry,
+    bool Function()? shouldContinue,
   }) async {
     var attempt = 0;
     while (true) {
+      if (shouldContinue != null && !shouldContinue()) {
+        throw const SmartListCancelledException('retry aborted');
+      }
       attempt++;
       try {
         return await action();
       } catch (e) {
+        if (e is SmartListCancelledException) rethrow;
         if (!shouldRetry(e, attempt)) rethrow;
+        if (shouldContinue != null && !shouldContinue()) {
+          throw const SmartListCancelledException('retry aborted');
+        }
         onRetry?.call(attempt, e);
         await Future<void>.delayed(backoffFor(attempt));
       }

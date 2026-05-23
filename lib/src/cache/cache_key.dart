@@ -31,7 +31,10 @@ class SmartListCacheKey {
         query,
         page,
         cursor,
-        Object.hashAllUnordered(filters.entries),
+        // MapEntry has no value equality, so hashing entries directly would
+        // violate the ==/hashCode contract. Hash keys and values independently.
+        Object.hashAllUnordered(filters.keys),
+        Object.hashAllUnordered(filters.values),
       );
 
   @override
