@@ -544,6 +544,119 @@ void main() {
     });
   });
 
+  group('SmartListController — clearSearch preserves real-time edits (#20)',
+      () {
+    test('insertAtTop during search survives clearSearch', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
+        searchDebounce: Duration.zero,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(c.value.isSearchActive, isTrue);
+
+      // Insert a brand-new item while in search mode. Pre-fix: this was
+      // silently dropped by `clearSearch` when the snapshot was restored.
+      c.insertAtTop(99);
+
+      c.clearSearch();
+      expect(c.value.isSearchActive, isFalse);
+      // The inserted item is preserved at the top of the restored list.
+      expect(c.value.items.first, 99);
+      expect(c.value.items.contains(99), isTrue);
+      c.dispose();
+    });
+
+    test('removeWhere during search is replayed against the snapshot',
+        () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
+        searchDebounce: Duration.zero,
+        enableCache: false,
+      );
+      await c.loadInitial();
+
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      // Remove a value that's also in the pre-search snapshot.
+      c.removeWhere((i) => i == 1);
+
+      c.clearSearch();
+      expect(c.value.items.contains(1), isFalse,
+          reason: 'removeWhere during search must affect snapshot too');
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — insertAtBottom (#21)', () {
+    test('appends to the data list', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+      );
+      await c.loadInitial();
+      c.insertAtBottom(99);
+      expect(c.value.items, [1, 2, 3, 99]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — reset (#27)', () {
+    test('reset drops items, filters, and search state', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      await c.applyFilters({'k': 'v'});
+      expect(c.value.filters, isNotEmpty);
+
+      c.reset();
+      expect(c.value.items, isEmpty);
+      expect(c.value.filters, isEmpty);
+      expect(c.value.phase, SmartListPhase.initial);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — applyFilters short-circuit (#27)', () {
+    test('passing unchanged filters does not re-fetch', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      await c.applyFilters({'k': 'v'});
+      final before = src.callCount;
+
+      // Same filters, different map identity — must short-circuit.
+      await c.applyFilters({'k': 'v'});
+      expect(src.callCount, before,
+          reason: 'unchanged filters must not trigger a fetch');
+      c.dispose();
+    });
+  });
+
   group('SmartListController — pagination serialization (#11)', () {
     test('concurrent loadNextPage calls do not double-append', () async {
       // Slow fetcher so we can fire many concurrent calls while the first

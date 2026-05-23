@@ -176,6 +176,10 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   /// *written* to the cache, overwriting any stale entry. Pass
   /// `bypassCache: false` to permit serving the refresh from cache —
   /// useful for cheap "redo" calls where stale data is acceptable.
+  ///
+  /// When a search is active, [refresh] re-fetches the *search results*
+  /// only — not the underlying unfiltered list. If you need to refresh
+  /// the underlying data, call [clearSearch] first.
   Future<void> refresh({bool bypassCache = true}) async {
     if (_disposed) return;
     await _startFetchSequence(
@@ -254,15 +258,50 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   // ─── Real-time mutations ─────────────────────────────────────────────────
 
-  /// Prepend an item (e.g. a freshly-arrived chat message).
+  /// Prepend an item to the data list — it becomes `items[0]`.
+  ///
+  /// Visual position depends on the consuming widget's `reverse` flag.
+  /// In the default (non-reverse) layout this is the top of the screen.
+  /// In `reverse: true` layouts (chat-style) this is the *bottom* of the
+  /// screen — which is typically where you want a newly-arrived message
+  /// to land. If you instead need to append at the end of the data list
+  /// (rare in chat UIs), use [insertAtBottom].
+  ///
+  /// When a search is active, the item is *also* prepended to the hidden
+  /// pre-search snapshot so it survives a later [clearSearch]. Predicate-
+  /// based mutations ([removeWhere], [updateWhere]) likewise replay against
+  /// the snapshot. [insertAtIndex] has no semantic mapping (the index is
+  /// only meaningful for the visible list) and is not replayed.
   void insertAtTop(T item) {
     if (_disposed) return;
     value = value.copyWith(
       items: List<T>.unmodifiable(<T>[item, ...value.items]),
     );
+    if (_preSearchItems != null) {
+      _preSearchItems = <T>[item, ..._preSearchItems!];
+    }
+  }
+
+  /// Append an item to the end of the data list. Companion to [insertAtTop].
+  /// In `reverse: true` layouts this lands at the visual top of the screen.
+  /// When a search is active, also appended to the pre-search snapshot so
+  /// it survives [clearSearch].
+  void insertAtBottom(T item) {
+    if (_disposed) return;
+    value = value.copyWith(
+      items: List<T>.unmodifiable(<T>[...value.items, item]),
+    );
+    if (_preSearchItems != null) {
+      _preSearchItems = <T>[..._preSearchItems!, item];
+    }
   }
 
   /// Insert at an arbitrary index. Out-of-range indices are clamped.
+  ///
+  /// Index semantics apply to the visible list only — when a search is
+  /// active, the item is NOT replayed against the pre-search snapshot
+  /// (the index would be meaningless there). Use [insertAtTop] for
+  /// inserts that should survive a later [clearSearch].
   void insertAtIndex(int index, T item) {
     if (_disposed) return;
     final next = List<T>.of(value.items);
@@ -271,20 +310,31 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     value = value.copyWith(items: List<T>.unmodifiable(next));
   }
 
-  /// Remove all items matching [test].
+  /// Remove all items matching [test]. Replayed against the pre-search
+  /// snapshot when a search is active so a later [clearSearch] reflects
+  /// the deletion.
   void removeWhere(bool Function(T item) test) {
     if (_disposed) return;
     final next = List<T>.of(value.items)..removeWhere(test);
     value = value.copyWith(items: List<T>.unmodifiable(next));
+    if (_preSearchItems != null) {
+      _preSearchItems = List<T>.of(_preSearchItems!)..removeWhere(test);
+    }
   }
 
   /// Replace all items matching [test] with the result of [update].
+  /// Replayed against the pre-search snapshot when a search is active.
   void updateWhere(bool Function(T item) test, T Function(T item) update) {
     if (_disposed) return;
     final next = <T>[
       for (final item in value.items) test(item) ? update(item) : item,
     ];
     value = value.copyWith(items: List<T>.unmodifiable(next));
+    if (_preSearchItems != null) {
+      _preSearchItems = <T>[
+        for (final item in _preSearchItems!) test(item) ? update(item) : item,
+      ];
+    }
   }
 
   /// Drop all in-memory state and start fresh on the next `loadInitial`.
