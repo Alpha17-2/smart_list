@@ -64,17 +64,17 @@ documentation issues identified during code review. Highlights:
   `UnmodifiableListView<T>(...)` — same immutability contract, no
   per-call copy. Microbenchmarked at ~400× faster for a 10k-item
   list (see `test/benchmark_test.dart`).
-
-### Deferred
-
-- Per-notification `ValueListenableBuilder` rebuild of the entire
-  `ListView` subtree (~1 `itemBuilder` call per visible item per
-  state change) is documented but unaddressed. The microbenchmark
-  in `test/benchmark_test.dart` quantifies the cost. Mitigation
-  options today: wrap your `itemBuilder` widgets in
-  `RepaintBoundary`, return `const` widgets where possible. A
-  proper fix (split-rebuild via separate items-only `Listenable`)
-  is tracked as a follow-up.
+- Split-rebuild for `SmartListView`: the populated `ListView` body
+  is now extracted into a `_SmartListBody` widget passed via
+  `ValueListenableBuilder`'s `child:` slot. It subscribes to the
+  controller independently and only `setState`s when `items`,
+  `phase`, or `error` actually change — filtering out
+  query / filters / `retryAttempt` notifications that don't affect
+  the rendered body. Benchmarked: a refresh cycle now triggers
+  ~50% fewer `itemBuilder` calls (the `refreshing` transition
+  preserves the items reference, so it no longer rebuilds the
+  body); a retry chain with N attempts skips N body rebuilds
+  entirely.
 
 ## 0.0.1 — 2026-05-02
 

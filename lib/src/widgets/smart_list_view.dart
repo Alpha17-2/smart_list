@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../controller/smart_list_controller.dart';
+import '../core/smart_list_phase.dart';
 import '../core/smart_list_state.dart';
 import 'default_state_builders.dart';
 
@@ -149,10 +150,34 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
 
   @override
   Widget build(BuildContext context) {
+    // The populated list body is built ONCE per outer-widget rebuild and
+    // passed through `ValueListenableBuilder`'s `child:` slot. The body
+    // widget reference stays stable across phase-only state changes
+    // (e.g. success → loadingMore → success), so Flutter's reconciliation
+    // preserves its element + state and skips re-running the itemBuilder
+    // for unchanged items. The body subscribes to the controller itself
+    // and only setState's when items / phase / error actually change —
+    // ignoring noise like query / filters / retryAttempt notifications.
+    final body = _SmartListBody<T>(
+      controller: widget.controller,
+      itemBuilder: widget.itemBuilder,
+      separatorBuilder: widget.separatorBuilder,
+      loadingMoreBuilder: widget.loadingMoreBuilder,
+      loadMoreErrorBuilder: widget.loadMoreErrorBuilder,
+      footerBuilder: widget.footerBuilder,
+      padding: widget.padding,
+      physics: widget.physics,
+      reverse: widget.reverse,
+      enableRefresh: widget.enableRefresh,
+      loadMoreThreshold: widget.loadMoreThreshold,
+      scrollController: _controller,
+      onScrollNotification: _onScrollNotification,
+    );
+
     return ValueListenableBuilder<SmartListState<T>>(
       valueListenable: widget.controller,
-      builder: (context, state, _) {
-        Widget child;
+      builder: (context, state, child) {
+        Widget content;
         // Non-list states (loading/error/empty) are centred widgets and are
         // not inherently scrollable. When refresh is enabled, they need to
         // live inside an always-scrollable viewport so the pull-to-refresh
@@ -160,7 +185,7 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
         bool isPlaceholder = false;
 
         if (state.isInitialLoading) {
-          child = (widget.loadingBuilder ?? DefaultSmartListStates.loading)(
+          content = (widget.loadingBuilder ?? DefaultSmartListStates.loading)(
             context,
           );
           isPlaceholder = true;
@@ -168,29 +193,31 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
           final retry = state.isSearchActive
               ? () => widget.controller.search(state.query!)
               : widget.controller.refresh;
-          child = (widget.errorBuilder ?? DefaultSmartListStates.error)(
+          content = (widget.errorBuilder ?? DefaultSmartListStates.error)(
             context,
             state.error ?? 'Unknown error',
             retry,
           );
           isPlaceholder = true;
         } else if (state.isSearchEmpty) {
-          child =
+          content =
               (widget.searchEmptyBuilder ?? DefaultSmartListStates.searchEmpty)(
             context,
             state.query!,
           );
           isPlaceholder = true;
         } else if (state.isEmpty) {
-          child = (widget.emptyBuilder ?? DefaultSmartListStates.empty)(
+          content = (widget.emptyBuilder ?? DefaultSmartListStates.empty)(
             context,
           );
           isPlaceholder = true;
         } else {
-          child = _buildList(context, state);
+          // Populated path: return the pre-built body widget. The reference
+          // is identical across rebuilds — Flutter preserves the subtree.
+          content = child!;
         }
 
-        if (!widget.enableRefresh) return child;
+        if (!widget.enableRefresh) return content;
 
         if (isPlaceholder) {
           // Wrap the placeholder in a viewport-sized scrollable so the pull
@@ -199,8 +226,8 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
           // with one viewport-tall child keeps every internal box bounded
           // and avoids 'Center forces an infinite height' under
           // `SingleChildScrollView`.
-          final placeholder = child;
-          child = LayoutBuilder(
+          final placeholder = content;
+          content = LayoutBuilder(
             builder: (context, constraints) => ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
@@ -215,28 +242,127 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
 
         return RefreshIndicator(
           onRefresh: widget.controller.refresh,
-          child: child,
+          child: content,
         );
       },
+      child: body,
     );
   }
+}
 
-  Widget _buildList(BuildContext context, SmartListState<T> state) {
-    final itemCount = state.items.length + 1; // +1 for footer slot
+/// The populated `ListView` portion of [SmartListView], extracted into its
+/// own widget so it can subscribe to the controller independently of the
+/// outer chrome (loading / error / empty / refresh-indicator wrapper).
+///
+/// It rebuilds only when `state.items`, `state.phase`, or `state.error`
+/// changes — three signals that actually affect the rendered output.
+/// Other notifications (query, filters, retryAttempt, etc.) are ignored.
+class _SmartListBody<T> extends StatefulWidget {
+  final SmartListController<T> controller;
+  final SmartListItemBuilder<T> itemBuilder;
+  final SmartListSeparatorBuilder? separatorBuilder;
+  final SmartListWidgetBuilder? loadingMoreBuilder;
+  final SmartListErrorBuilder? loadMoreErrorBuilder;
+  final SmartListFooterBuilder<T>? footerBuilder;
+  final EdgeInsetsGeometry? padding;
+  final ScrollPhysics? physics;
+  final bool reverse;
+  final bool enableRefresh;
+  final double loadMoreThreshold;
+  final ScrollController? scrollController;
+  final bool Function(ScrollNotification) onScrollNotification;
+
+  const _SmartListBody({
+    super.key,
+    required this.controller,
+    required this.itemBuilder,
+    required this.separatorBuilder,
+    required this.loadingMoreBuilder,
+    required this.loadMoreErrorBuilder,
+    required this.footerBuilder,
+    required this.padding,
+    required this.physics,
+    required this.reverse,
+    required this.enableRefresh,
+    required this.loadMoreThreshold,
+    required this.scrollController,
+    required this.onScrollNotification,
+  });
+
+  @override
+  State<_SmartListBody<T>> createState() => _SmartListBodyState<T>();
+}
+
+class _SmartListBodyState<T> extends State<_SmartListBody<T>> {
+  late List<T> _items;
+  late SmartListPhase _phase;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.controller.state;
+    _items = s.items;
+    _phase = s.phase;
+    _error = s.error;
+    widget.controller.addListener(_onControllerChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SmartListBody<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_onControllerChange);
+      widget.controller.addListener(_onControllerChange);
+      final s = widget.controller.state;
+      _items = s.items;
+      _phase = s.phase;
+      _error = s.error;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChange);
+    super.dispose();
+  }
+
+  /// Filter the controller's full-fat notification stream down to the
+  /// signals that actually affect the body's rendered output. This is
+  /// the core of the #26 optimisation — without it, every notification
+  /// (including filter / query / retryAttempt churn) would trigger a
+  /// rebuild of every visible item.
+  void _onControllerChange() {
+    final s = widget.controller.state;
+    if (identical(_items, s.items) &&
+        _phase == s.phase &&
+        identical(_error, s.error)) {
+      return;
+    }
+    setState(() {
+      _items = s.items;
+      _phase = s.phase;
+      _error = s.error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final itemCount = _items.length + 1; // +1 for footer slot
 
     Widget defaultFooter() {
-      if (state.isLoadingMore) {
+      if (_phase == SmartListPhase.loadingMore) {
         return (widget.loadingMoreBuilder ??
             DefaultSmartListStates.loadingMore)(context);
       }
-      if (state.hasError) {
+      if (_phase == SmartListPhase.error) {
         // A *pagination* error: items are visible, only the next page failed.
         // Use the compact inline builder (or the user's override) so we don't
         // dump a full-screen error widget at the bottom of the list.
         return (widget.loadMoreErrorBuilder ??
             DefaultSmartListStates.loadMoreError)(
           context,
-          state.error ?? 'Unknown error',
+          _error ?? 'Unknown error',
           widget.controller.loadNextPage,
         );
       }
@@ -244,9 +370,9 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
     }
 
     return NotificationListener<ScrollNotification>(
-      onNotification: _onScrollNotification,
+      onNotification: widget.onScrollNotification,
       child: ListView.separated(
-        controller: _controller,
+        controller: widget.scrollController,
         padding: widget.padding,
         physics: widget.physics ??
             (widget.enableRefresh
@@ -259,16 +385,16 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
           // footer slot. `index == items.length - 1` is the gap that sits
           // *before* the footer; every smaller index is a gap between two
           // real items and should render normally.
-          if (index == state.items.length - 1) return const SizedBox.shrink();
+          if (index == _items.length - 1) return const SizedBox.shrink();
           return widget.separatorBuilder?.call(context, index) ??
               const SizedBox.shrink();
         },
         itemBuilder: (context, index) {
-          if (index >= state.items.length) {
-            return widget.footerBuilder?.call(context, state) ??
+          if (index >= _items.length) {
+            return widget.footerBuilder?.call(context, widget.controller.state) ??
                 defaultFooter();
           }
-          return widget.itemBuilder(context, state.items[index], index);
+          return widget.itemBuilder(context, _items[index], index);
         },
       ),
     );
