@@ -60,6 +60,21 @@ documentation issues identified during code review. Highlights:
   documented.
 - `SmartListPage.empty()` sets `totalCount: null` (unknown), not 0.
 - README and CHANGELOG inaccuracies corrected.
+- `List<T>.unmodifiable(...)` calls in the controller replaced with
+  `UnmodifiableListView<T>(...)` — same immutability contract, no
+  per-call copy. Microbenchmarked at ~400× faster for a 10k-item
+  list (see `test/benchmark_test.dart`).
+
+### Deferred
+
+- Per-notification `ValueListenableBuilder` rebuild of the entire
+  `ListView` subtree (~1 `itemBuilder` call per visible item per
+  state change) is documented but unaddressed. The microbenchmark
+  in `test/benchmark_test.dart` quantifies the cost. Mitigation
+  options today: wrap your `itemBuilder` widgets in
+  `RepaintBoundary`, return `const` widgets where possible. A
+  proper fix (split-rebuild via separate items-only `Listenable`)
+  is tracked as a follow-up.
 
 ## 0.0.1 — 2026-05-02
 

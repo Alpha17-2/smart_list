@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show UnmodifiableListView;
 
 import 'package:flutter/foundation.dart';
 
@@ -249,7 +250,7 @@ class SmartListController<T> extends ChangeNotifier
     _searchSeen = null;
 
     _set(value.copyWith(
-      items: List<T>.unmodifiable(restoredItems),
+      items: UnmodifiableListView<T>(restoredItems),
       phase: SmartListPhase.success,
       hasReachedEnd: restoredEnd,
       clearError: true,
@@ -298,7 +299,7 @@ class SmartListController<T> extends ChangeNotifier
   void insertAtTop(T item) {
     if (_disposed) return;
     _set(value.copyWith(
-      items: List<T>.unmodifiable(<T>[item, ...value.items]),
+      items: UnmodifiableListView<T>(<T>[item, ...value.items]),
     ));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[item, ..._preSearchItems!];
@@ -312,7 +313,7 @@ class SmartListController<T> extends ChangeNotifier
   void insertAtBottom(T item) {
     if (_disposed) return;
     _set(value.copyWith(
-      items: List<T>.unmodifiable(<T>[...value.items, item]),
+      items: UnmodifiableListView<T>(<T>[...value.items, item]),
     ));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[..._preSearchItems!, item];
@@ -330,7 +331,7 @@ class SmartListController<T> extends ChangeNotifier
     final next = List<T>.of(value.items);
     final i = index.clamp(0, next.length);
     next.insert(i, item);
-    _set(value.copyWith(items: List<T>.unmodifiable(next)));
+    _set(value.copyWith(items: UnmodifiableListView<T>(next)));
   }
 
   /// Remove all items matching [test]. Replayed against the pre-search
@@ -339,7 +340,7 @@ class SmartListController<T> extends ChangeNotifier
   void removeWhere(bool Function(T item) test) {
     if (_disposed) return;
     final next = List<T>.of(value.items)..removeWhere(test);
-    _set(value.copyWith(items: List<T>.unmodifiable(next)));
+    _set(value.copyWith(items: UnmodifiableListView<T>(next)));
     if (_preSearchItems != null) {
       _preSearchItems = List<T>.of(_preSearchItems!)..removeWhere(test);
     }
@@ -352,7 +353,7 @@ class SmartListController<T> extends ChangeNotifier
     final next = <T>[
       for (final item in value.items) test(item) ? update(item) : item,
     ];
-    _set(value.copyWith(items: List<T>.unmodifiable(next)));
+    _set(value.copyWith(items: UnmodifiableListView<T>(next)));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[
         for (final item in _preSearchItems!) test(item) ? update(item) : item,
@@ -566,7 +567,7 @@ class SmartListController<T> extends ChangeNotifier
         : _mergeItems(value.items, page.items, isSearch: isSearch);
 
     _set(value.copyWith(
-      items: List<T>.unmodifiable(merged),
+      items: UnmodifiableListView<T>(merged),
       phase: SmartListPhase.success,
       hasReachedEnd: reachedEnd,
       clearError: true,
