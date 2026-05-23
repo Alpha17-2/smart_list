@@ -131,9 +131,17 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
 
   bool _onScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
+    // Skip notifications fired before the list has any meaningful extent —
+    // when the content is shorter than the viewport, `maxScrollExtent` is 0
+    // and `remaining` is also 0, so without this guard we'd fire on every
+    // metric change even though the list has not reached its end.
+    if (notification.metrics.maxScrollExtent <= 0) return false;
     final remaining =
         notification.metrics.maxScrollExtent - notification.metrics.pixels;
     if (remaining <= widget.loadMoreThreshold) {
+      // The controller's own `_paginationLock` is the source of truth — but
+      // we still pay for the call (closure + guard chain) on every settle
+      // frame during a fling. Cheap to call; harmless when it short-circuits.
       widget.controller.loadNextPage();
     }
     return false;

@@ -13,6 +13,12 @@ import 'package:flutter/foundation.dart';
 @immutable
 class SmartListPage<T> {
   /// The items for this page.
+  ///
+  /// Treated as immutable by the controller — do not mutate this list after
+  /// returning the page from your fetcher. The controller will store
+  /// references into [items] until the next page is merged. If you need to
+  /// keep mutating a backing collection, hand a fresh `List.of(source)` to
+  /// the constructor instead.
   final List<T> items;
 
   /// Cursor to pass on the next request. `null` indicates end-of-list when
@@ -24,6 +30,7 @@ class SmartListPage<T> {
   final bool? hasMore;
 
   /// Total count, when known. Purely informational; not used for paging.
+  /// `null` means "unknown" — distinct from `0` ("server reported zero").
   final int? totalCount;
 
   const SmartListPage({
@@ -33,10 +40,13 @@ class SmartListPage<T> {
     this.totalCount,
   });
 
-  /// Convenience for an explicitly-empty terminal page.
+  /// Convenience for an explicitly-empty terminal page — i.e. "this query
+  /// produced no more pages." [totalCount] is left `null` (unknown) rather
+  /// than `0`, since "we ran out of pages" is not the same as "the server
+  /// reported zero matching records".
   const SmartListPage.empty()
       : items = const [],
         nextCursor = null,
         hasMore = false,
-        totalCount = 0;
+        totalCount = null;
 }
