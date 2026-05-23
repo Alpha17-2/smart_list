@@ -6,75 +6,124 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.1.0 — 2026-05-24
 
-### Breaking changes
+A correctness, concurrency, and performance sweep based on a full
+code review. 28 issues addressed across the controller, widget,
+caching, and pagination layers. Two breaking changes — both narrow,
+both with clear migration paths.
+
+### ⚠️ Breaking
 
 - **`SmartListController` no longer extends `ValueNotifier`.** It now
-  extends `ChangeNotifier` and implements
-  `ValueListenable<SmartListState<T>>`. Reads via `controller.value`
-  (or the new alias `controller.state`) still work; subscribing via
-  `ValueListenableBuilder(valueListenable: controller, ...)` still
-  works. The breaking part: `controller.value = X` no longer compiles
-  — external code can no longer corrupt internal bookkeeping by
-  writing the state directly. Use the mutation APIs (`insertAtTop`,
-  `applyFilters`, `refresh`, `reset`, etc.) instead.
+  extends `ChangeNotifier` and `implements ValueListenable<SmartListState<T>>`.
+  - **Still works:** reading `controller.value` (or the new alias
+    `controller.state`); subscribing via
+    `ValueListenableBuilder(valueListenable: controller, ...)`.
+  - **No longer compiles:** `controller.value = X` from external
+    code. External writes were a footgun — they bypassed the
+    controller's internal bookkeeping. Use the mutation APIs
+    (`insertAtTop`, `applyFilters`, `refresh`, `reset`, etc.) instead.
 
 - **`SmartListController(...)` no longer accepts `enableCache:`.**
   The full constructor now takes a single `cache:` parameter:
   - `cache: null` (or omitted) → no cache.
   - `cache: someStore` → use that store.
 
-  Anyone previously using `enableCache: false` should drop the line;
-  anyone relying on the implicit default cache should add
-  `cache: MemoryCacheStore<T>()` explicitly. The convenience factory
-  `SmartListController.simple` still accepts `enableCache: true` for
-  the common case.
+  Migration: drop any `enableCache: false`; add an explicit
+  `cache: MemoryCacheStore<T>()` if you previously relied on the
+  implicit default. `SmartListController.simple` still accepts
+  `enableCache: true` for the common case — no migration needed
+  there.
 
-### Fixed
+### Added
 
-A full sweep of correctness, concurrency, ergonomics, and
-documentation issues identified during code review. Highlights:
+- `insertAtBottom(item)` — companion to `insertAtTop`; appends to
+  the end of the data list. Documented `reverse: true` semantics
+  for chat-style layouts.
+- `loadMoreErrorBuilder` slot on `SmartListView` for inline
+  pagination-error footers. Defaults to a compact "Failed to
+  load more / Retry" row instead of the full-screen error widget.
+- `SmartListController.state` — alias for `controller.value`,
+  readable shorthand outside `ValueListenableBuilder` contexts.
 
-- hashCode/equals contract for `SmartListState` and `SmartListCacheKey`
-  (no more silent cache misses).
-- `RetryPolicy.run` honours cancellation and is safe across dispose.
-- `_bypassCacheReadOnce` race fixed by threading bypass per-call.
-- `SmartListView` separator off-by-one corrected.
-- Pending debounced searches are cancelled on `refresh` /
-  `loadInitial(force)` / `applyFilters`.
-- `applyFilters` emits a single coherent state transition instead of
-  flashing an intermediate snapshot.
-- Concurrent `loadNextPage` calls are now serialized; the same page
-  cannot be appended twice.
-- Scroll handler skips notifications fired before the list has any
-  scrollable extent.
-- `_mergeItems` runs in O(M) (persisted seen-set per phase).
-- New `loadMoreErrorBuilder` slot — inline pagination errors are no
-  longer rendered with the full-screen error widget.
-- Pull-to-refresh works on every placeholder state (loading / error
-  / empty) via a viewport-tall scrollable wrapper.
-- `Debouncer(Duration.zero)` now schedules asynchronously so callers
-  can invoke `run` from inside a build pass safely.
-- `clearSearch` preserves `insertAtTop` / `removeWhere` /
-  `updateWhere` mutations made while a search was active.
-- New `insertAtBottom` method; reverse-list (chat) semantics
-  documented.
-- `SmartListPage.empty()` sets `totalCount: null` (unknown), not 0.
-- README and CHANGELOG inaccuracies corrected.
-- `List<T>.unmodifiable(...)` calls in the controller replaced with
-  `UnmodifiableListView<T>(...)` — same immutability contract, no
-  per-call copy. Microbenchmarked at ~400× faster for a 10k-item
-  list (see `test/benchmark_test.dart`).
-- Split-rebuild for `SmartListView`: the populated `ListView` body
-  is now extracted into a `_SmartListBody` widget passed via
+### Fixed — correctness
+
+- **Equality / hashCode contract** for `SmartListState` and
+  `SmartListCacheKey`. Previously hashed `filters.entries`;
+  `MapEntry` has no value-equality, so equal filter maps produced
+  different hashes — silently breaking cache lookups.
+- **Separator off-by-one** in `SmartListView` — the divider between
+  the last two real items was being suppressed along with the
+  intended footer-slot suppression.
+- **`SmartListPage.empty().totalCount`** is now `null` (unknown)
+  instead of `0` (server reported zero).
+
+### Fixed — concurrency
+
+- **`RetryPolicy.run` now honours cancellation.** New `shouldContinue`
+  callback aborts the retry chain via `SmartListCancelledException`.
+  The controller wires it to `!_disposed && token.isCurrent`, so
+  retries no longer continue past dispose or stomp on superseded
+  requests. `onRetry` also guards against post-dispose mutations.
+- **Cache-bypass intent is now per-call**, not a controller-wide
+  flag. Concurrent fetches can no longer steal each other's bypass.
+- **`applyFilters` emits a single coherent state transition**
+  instead of flashing `{new filters, old phase, old items}` first.
+- **Pending debounced searches are cancelled** when `refresh()` /
+  `loadInitial(force: true)` / `applyFilters()` fires, so a stale
+  search can't re-enter search mode after the reset.
+- **Concurrent `loadNextPage()` calls are serialized** via an
+  internal lock — extra callers await the in-flight result and
+  return without firing a duplicate fetch.
+
+### Fixed — widget / UI
+
+- **Pull-to-refresh works on every placeholder state** (loading /
+  error / empty). Placeholders are now wrapped in a viewport-tall
+  scrollable so the `RefreshIndicator` always has a target.
+- **`Debouncer(Duration.zero)` always schedules asynchronously**
+  (previously fired synchronously, which could trigger
+  "setState called during build" when invoked from a build pass).
+- **Internal `ScrollController` is not resurrected after dispose**
+  — the lazy getter returns `null` instead of leaking a fresh one.
+- **`clearSearch` preserves real-time edits made during search.**
+  `insertAtTop`, `removeWhere`, and `updateWhere` mutations now
+  replay against the pre-search snapshot so they survive the
+  restore. `insertAtIndex` is unchanged (positional, no semantic
+  mapping) and that exclusion is documented.
+
+### Performance
+
+- **`List<T>.unmodifiable(...)` → `UnmodifiableListView<T>(...)`** in
+  the controller. Same immutability contract, zero-copy wrap.
+  Microbenchmarked at **~400× faster** for a 10k-item list
+  (see `test/benchmark_test.dart`).
+- **`_mergeItems` is now O(M)** instead of O(N + M) per page. The
+  dedupe seen-set is persisted per phase and reset on fresh
+  sequences.
+- **Split-rebuild for `SmartListView`.** The populated `ListView`
+  body is extracted into a dedicated widget passed via
   `ValueListenableBuilder`'s `child:` slot. It subscribes to the
   controller independently and only `setState`s when `items`,
   `phase`, or `error` actually change — filtering out
-  query / filters / `retryAttempt` notifications that don't affect
-  the rendered body. Benchmarked: a refresh cycle now triggers
-  ~50% fewer `itemBuilder` calls (the `refreshing` transition
-  preserves the items reference, so it no longer rebuilds the
-  body); a retry chain with N attempts skips N body rebuilds
-  entirely.
+  query / filters / `retryAttempt` notifications. Benchmarked: a
+  refresh cycle triggers **~50% fewer `itemBuilder` calls**
+  (the `refreshing` transition preserves the items reference and
+  no longer rebuilds the body); retry chains with N attempts skip
+  N body rebuilds entirely.
+- **Scroll-end handler bails when `maxScrollExtent <= 0`** — short
+  lists no longer fire `loadNextPage` on every metric change.
+
+### Docs
+
+- `README.md`: dropped the inaccurate "two lines" tagline;
+  documented the 5-minute default cache TTL; clarified that
+  `SmartListController.simple` is page-pagination only.
+- `CHANGELOG.md`: corrected the "56 tests" / `LLD.md` references
+  in 0.0.1.
+- Dartdoc clarifications on `refresh()`-during-search,
+  `clearSearch` stale-pagination, `applyFilters({})` no-op
+  semantics, `SmartListPage.items` immutability contract, stale
+  cache-write behaviour, and reverse-mode `insertAtTop`.
 
 ## 0.0.1 — 2026-05-02
 
