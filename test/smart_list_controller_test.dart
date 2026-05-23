@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_list/smart_list.dart';
 
@@ -474,7 +475,6 @@ void main() {
         fetcher: src.fetch,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
         searchDebounce: const Duration(milliseconds: 50),
-        enableCache: false,
       );
       await c.loadInitial();
 
@@ -501,7 +501,6 @@ void main() {
         fetcher: src.fetch,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
         searchDebounce: const Duration(milliseconds: 50),
-        enableCache: false,
       );
       await c.loadInitial();
 
@@ -555,7 +554,6 @@ void main() {
         fetcher: src.fetch,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
         searchDebounce: Duration.zero,
-        enableCache: false,
       );
       await c.loadInitial();
       expect(c.value.items, [1, 2, 3, 4, 5]);
@@ -586,7 +584,6 @@ void main() {
         fetcher: src.fetch,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
         searchDebounce: Duration.zero,
-        enableCache: false,
       );
       await c.loadInitial();
 
@@ -700,7 +697,6 @@ void main() {
         fetcher: src,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
         uniqueKey: (i) => i,
-        enableCache: false,
       );
       await c.loadInitial();
       await c.loadNextPage();
@@ -719,12 +715,50 @@ void main() {
         fetcher: src,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
         uniqueKey: (i) => i,
-        enableCache: false,
       );
       await c.loadInitial();
       expect(c.value.items, [1, 2, 3]);
       await c.refresh();
       expect(c.value.items, [1, 2, 3]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — ChangeNotifier interop (#16)', () {
+    test('is usable as a ValueListenable<SmartListState>', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+      );
+
+      // The controller satisfies ValueListenable<SmartListState<T>> so
+      // existing `ValueListenableBuilder(valueListenable: controller, ...)`
+      // call sites continue to work after the ChangeNotifier migration.
+      final ValueListenable<SmartListState<int>> asListenable = c;
+      expect(asListenable.value.phase, SmartListPhase.initial);
+
+      await c.loadInitial();
+      expect(asListenable.value.items, [1, 2, 3]);
+
+      // `state` is the readable alias for `value`.
+      expect(c.state, same(asListenable.value));
+      c.dispose();
+    });
+
+    test('listeners fire on state change exactly once per coherent update',
+        () async {
+      Future<SmartListPage<int>> src(SmartListPageRequest _) async =>
+          const SmartListPage<int>(items: [1, 2], hasMore: false);
+      final c = SmartListController<int>.simple(fetcher: src, pageSize: 10);
+
+      var notifies = 0;
+      c.addListener(() => notifies++);
+
+      await c.loadInitial();
+      // At minimum, the loading-transition snapshot and the success
+      // snapshot should each fire; the controller must not stop firing.
+      expect(notifies, greaterThanOrEqualTo(2));
       c.dispose();
     });
   });
