@@ -1,7 +1,7 @@
 # SmartList
 
 > A Flutter package that takes the headache out of building lists.
-> Pagination, search, pull-to-refresh, caching, retries, and clean loading/error states — all wired up for you in two lines of code.
+> Pagination, search, pull-to-refresh, caching, retries, and clean loading/error states — wired up with one controller and one widget.
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-02569B?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart)](https://dart.dev)
@@ -65,7 +65,7 @@ flutter pub get
 
 ---
 
-## Quickstart — 2 lines, really
+## Quickstart
 
 ```dart
 import 'package:smart_list/smart_list.dart';
@@ -81,7 +81,7 @@ SmartListView<Post>(
 );
 ```
 
-That's it. You now have a list with infinite scroll, pull-to-refresh, loading/empty/error states, and caching.
+That's it. You now have a list with infinite scroll, pull-to-refresh, loading/empty/error states, and an in-memory cache (5-minute TTL by default — pass your own `MemoryCacheStore(ttl: …)` or a custom `SmartListCacheStore` via the full constructor to tune it).
 
 ---
 
@@ -138,7 +138,16 @@ ValueListenableBuilder<SmartListState<Product>>(
 
 ## Pagination styles
 
-Pick whichever your backend uses:
+`SmartListController.simple` hard-codes page-based pagination. To use cursor or offset, build the controller with the full constructor and supply a `strategyBuilder`:
+
+```dart
+SmartListController<MyItem>(
+  fetcher: myFetcher,
+  strategyBuilder: () => CursorPaginationStrategy<MyItem>(pageSize: 20),
+);
+```
+
+Available strategies:
 
 ```dart
 // Page-based: ?page=1&size=20  (this is the default in `.simple`)
