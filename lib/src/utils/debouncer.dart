@@ -17,12 +17,13 @@ class Debouncer {
 
   /// Schedule [action] to run after [delay], cancelling any previously
   /// scheduled action.
+  ///
+  /// Even when [delay] is [Duration.zero], the action runs asynchronously
+  /// (on the next microtask via a zero-duration `Timer`) so callers can
+  /// safely invoke [run] from inside a build or layout pass without
+  /// triggering 'setState/markNeedsBuild called during build'.
   void run(void Function() action) {
     _timer?.cancel();
-    if (delay == Duration.zero) {
-      action();
-      return;
-    }
     _timer = Timer(delay, action);
   }
 

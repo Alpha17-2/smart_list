@@ -380,6 +380,88 @@ void main() {
       expect(c.value.filters, {'status': 'open'});
       c.dispose();
     });
+
+    test('applyFilters does not emit a stale intermediate snapshot (#10)',
+        () async {
+      // Pre-fix: applyFilters wrote `{new filters, old phase, OLD items}`
+      // first, then fired the loading transition. Listeners briefly saw the
+      // new filters paired with the *previous* result set — flashing UI.
+      // Post-fix: filters are folded into the loading-transition snapshot,
+      // so new-filters and old-items can never co-occur.
+      var page = 1;
+      Future<SmartListPage<int>> src(SmartListPageRequest req) async {
+        // Page A is [1, 2]; page B (filtered) is [9].
+        if (req.filters.containsKey('status')) {
+          return const SmartListPage<int>(items: [9], hasMore: false);
+        }
+        page++;
+        return const SmartListPage<int>(items: [1, 2], hasMore: false);
+      }
+
+      final c = SmartListController<int>.simple(
+        fetcher: src,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2]);
+
+      final snapshots = <(Map<String, dynamic>, List<int>)>[];
+      void listener() =>
+          snapshots.add((c.value.filters, List<int>.from(c.value.items)));
+      c.addListener(listener);
+
+      await c.applyFilters({'status': 'open'});
+      c.removeListener(listener);
+
+      for (final (filters, items) in snapshots) {
+        // The forbidden intermediate: new filters but stale [1, 2] items.
+        final isStaleIntermediate =
+            filters.containsKey('status') && const [1, 2].toString() == items.toString();
+        expect(isStaleIntermediate, isFalse,
+            reason: 'new filters must never co-occur with the previous '
+                'result set ($filters paired with $items)');
+      }
+      expect(c.value.items, [9]);
+      expect(page, greaterThan(1));
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — bypass flag isolation (#7)', () {
+    test('bypassCache is per-call (no controller-wide leakage)', () async {
+      // Pre-fix: bypass was a controller-wide bool, so a fetch that ran
+      // between `refresh(bypassCache: true)` setting the flag and refresh
+      // actually consuming it would steal the bypass. The fix threads
+      // bypass as a parameter — invoking back-to-back refreshes with
+      // different bypass intents must each see its own intent.
+      var hits = 0;
+      Future<SmartListPage<int>> src(SmartListPageRequest _) async {
+        hits++;
+        return const SmartListPage<int>(items: [1, 2, 3], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        cache: MemoryCacheStore<int>(),
+      );
+      await c.loadInitial();
+      final afterInitial = hits;
+
+      await c.refresh(bypassCache: true);
+      expect(hits, afterInitial + 1, reason: 'first refresh hits network');
+
+      await c.refresh(bypassCache: false);
+      expect(hits, afterInitial + 1,
+          reason: 'second refresh must serve from cache; the prior '
+              'bypass intent must not linger on a controller-wide flag');
+
+      await c.refresh(bypassCache: true);
+      expect(hits, afterInitial + 2,
+          reason: 'third refresh hits network again under its own intent');
+      c.dispose();
+    });
   });
 
   group('SmartListController — debounce cancellation (#9)', () {

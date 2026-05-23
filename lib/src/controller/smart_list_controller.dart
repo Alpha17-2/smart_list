@@ -69,12 +69,6 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
   final RequestToken _requestToken = RequestToken();
 
-  /// One-shot flag — when `true`, the next call to [_fetchNext] skips the
-  /// cache *read* (but still writes the fresh response). Set by [refresh] so
-  /// pull-to-refresh always reaches the network. Cleared after the fetch
-  /// consumes it, so subsequent paginations resume normal cache behaviour.
-  bool _bypassCacheReadOnce = false;
-
   bool _disposed = false;
 
   // ─── Construction ────────────────────────────────────────────────────────
@@ -152,8 +146,10 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   /// useful for cheap "redo" calls where stale data is acceptable.
   Future<void> refresh({bool bypassCache = true}) async {
     if (_disposed) return;
-    _bypassCacheReadOnce = bypassCache;
-    await _startFetchSequence(reason: _FetchReason.refresh);
+    await _startFetchSequence(
+      reason: _FetchReason.refresh,
+      bypassCache: bypassCache,
+    );
   }
 
   /// Begin a search. Empty/whitespace queries are treated as `clearSearch`.
@@ -199,8 +195,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   Future<void> applyFilters(Map<String, dynamic> filters) async {
     if (_disposed) return;
     if (mapEquals(filters, value.filters)) return;
-    value = value.copyWith(filters: Map.unmodifiable(filters));
-    await _startFetchSequence(reason: _FetchReason.filtersChanged);
+    // The filter swap is applied as part of the loading transition so
+    // listeners observe one consistent notification instead of two — the
+    // pre-fix path emitted `{new filters, old success phase, old items}`
+    // first, then the loading transition, briefly flashing inconsistent UI.
+    await _startFetchSequence(
+      reason: _FetchReason.filtersChanged,
+      filters: Map<String, dynamic>.unmodifiable(filters),
+    );
   }
 
   // ─── Real-time mutations ─────────────────────────────────────────────────
@@ -278,7 +280,11 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     await _fetchNext();
   }
 
-  Future<void> _startFetchSequence({required _FetchReason reason}) async {
+  Future<void> _startFetchSequence({
+    required _FetchReason reason,
+    bool bypassCache = false,
+    Map<String, dynamic>? filters,
+  }) async {
     // Supersede any pending debounced search — without this, a search queued
     // moments before a refresh / loadInitial(force) / applyFilters could fire
     // after the reset and silently put the controller back into search mode.
@@ -301,14 +307,15 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       items: keepItems ? value.items : const [],
       phase: phase,
       hasReachedEnd: false,
+      filters: filters,
       clearError: true,
       clearStackTrace: true,
       retryAttempt: 0,
     );
-    await _fetchNext();
+    await _fetchNext(bypassCache: bypassCache);
   }
 
-  Future<void> _fetchNext() async {
+  Future<void> _fetchNext({bool bypassCache = false}) async {
     final isSearch = value.isSearchActive;
     final strategy = isSearch ? _searchStrategy! : _normalStrategy;
     final lastPage = isSearch ? _lastSearchPage : _lastNormalPage;
@@ -348,11 +355,12 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       cursor: request.cursor,
     );
 
-    // Cache hit fast-path. `_bypassCacheReadOnce` is consumed here so the
-    // bypass only applies to this single fetch; subsequent paginations
-    // resume using the cache normally.
-    final shouldReadCache = _useCache && !_bypassCacheReadOnce;
-    _bypassCacheReadOnce = false;
+    // Cache read is governed by the per-fetch `bypassCache` flag — never by
+    // controller-wide state — so concurrent fetches can't steal each other's
+    // bypass intent. Subsequent paginations triggered from `loadNextPage`
+    // (which doesn't go through `_startFetchSequence`) default to honouring
+    // the cache.
+    final shouldReadCache = _useCache && !bypassCache;
     final cached = shouldReadCache ? _cache?.read(cacheKey) : null;
     if (cached != null) {
       _applyPage(

@@ -72,6 +72,36 @@ class DefaultSmartListStates {
     );
   }
 
+  /// Default inline pagination-error footer — a compact row shown at the
+  /// bottom of a populated list when a *subsequent* page fails. Distinct
+  /// from [error], which is the full-screen fallback when the first page
+  /// has nothing to show.
+  static Widget loadMoreError(
+    BuildContext context,
+    Object error,
+    VoidCallback retry,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 18),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'Failed to load more',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 12),
+          TextButton(onPressed: retry, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+
   /// Default error widget — shows the [error] message and a retry button
   /// that invokes [retry] when tapped.
   static Widget error(
