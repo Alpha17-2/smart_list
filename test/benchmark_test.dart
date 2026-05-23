@@ -57,11 +57,11 @@ void main() {
   });
 
   group('#26 — ValueListenableBuilder rebuild cost', () {
-    testWidgets('items-identical phase change still rebuilds itemBuilder',
+    testWidgets('items-changing mutations rebuild itemBuilder (baseline)',
         (tester) async {
-      // 10 fake items, but the itemBuilder is heavily instrumented to count
-      // how often it gets called. We then push state changes that ONLY
-      // change phase (not items) and observe whether the itemBuilder runs.
+      // Every mutation changes the items reference, so the body MUST
+      // rebuild. This benchmark is the unavoidable baseline — used to
+      // confirm the optimisation doesn't *regress* this case.
       var builds = 0;
       Future<SmartListPage<int>> src(SmartListPageRequest _) async =>
           SmartListPage<int>(items: List<int>.generate(10, (i) => i + 1));
@@ -84,12 +84,8 @@ void main() {
         ),
       ));
       await tester.pumpAndSettle();
-
-      // Capture builds after initial render settles.
       final after = builds;
 
-      // Pump after each notification cycle so we measure the per-frame
-      // itemBuilder cost rather than what Flutter coalesces.
       const N = 10;
       for (var i = 0; i < N; i++) {
         c.insertAtTop(-1);
@@ -99,17 +95,70 @@ void main() {
       }
       await tester.pumpAndSettle();
 
+      // ignore: avoid_print
+      print('#26 baseline (items change every notification): '
+          '${builds - after} itemBuilder calls across $N×2 mutations');
+      c.dispose();
+    });
+
+    testWidgets('items-unchanged notifications no longer rebuild itemBuilder',
+        (tester) async {
+      // The #26 win: notifications that don't change the items reference
+      // (e.g. the `refreshing` phase transition during pull-to-refresh,
+      // which is fired with items=value.items — same reference) should
+      // not rebuild the body subtree. Pre-fix: every notification rebuilt
+      // every visible item. Post-fix: `_SmartListBody._onControllerChange`
+      // sees `identical(_items, s.items)` and skips setState.
+      //
+      // We trigger 10 refresh cycles. Each refresh fires:
+      //   1. Refreshing transition: items reference UNCHANGED → filtered.
+      //   2. Success after fetch: items reference CHANGES → body rebuilds.
+      // So we expect ~N (≈ 10) body rebuilds, each painting ~10 items =
+      // ~100 itemBuilder calls. Pre-fix would be ~2N rebuilds = ~200 calls.
+      var builds = 0;
+      Future<SmartListPage<int>> src(SmartListPageRequest _) async =>
+          SmartListPage<int>(items: List<int>.generate(10, (i) => i + 1));
+
+      final c = SmartListController<int>.simple(
+        fetcher: src,
+        pageSize: 10,
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SmartListView<int>(
+            controller: c,
+            itemBuilder: (_, item, __) {
+              builds++;
+              return SizedBox(height: 48, child: Text('item-$item'));
+            },
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final after = builds;
+
+      const N = 10;
+      for (var i = 0; i < N; i++) {
+        await c.refresh();
+        await tester.pumpAndSettle();
+      }
+
       final added = builds - after;
       // ignore: avoid_print
-      print('#26 visible itemBuilder calls after $N insertAtTop+removeWhere '
-          'cycles ($N×2 notifications, pumped between each): $added '
-          '(low value ≈ Flutter\'s ListView.builder laziness is already '
-          'amortising the rebuild; high value ≈ #26 refactor is worth it)');
+      print('#26 items-unchanged scenario: $added itemBuilder calls across '
+          '$N refresh cycles '
+          '(pre-fix would be ~2×$N×10 = ${2 * N * 10}; post-fix should '
+          'be roughly half that since the `refreshing` transition is '
+          'filtered out as items-unchanged)');
 
-      // Document the current behaviour — assert only that we got *some*
-      // signal, not the magnitude. The number guides whether #26 is worth
-      // the refactor.
-      expect(added, greaterThanOrEqualTo(0));
+      // Pre-fix bound (loose): every notification triggers a full rebuild
+      // of all visible items → 2 notifications × N cycles × ~10 visible
+      // = ~200. Post-fix bound: only the success notifications survive
+      // → ~100. Assert we're meaningfully under the pre-fix bound.
+      expect(added, lessThan(2 * N * 10),
+          reason: 'post-fix: items-unchanged notifications must not '
+              'rebuild the body subtree');
       c.dispose();
     });
   });
