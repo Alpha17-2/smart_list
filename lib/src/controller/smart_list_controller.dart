@@ -25,11 +25,12 @@ typedef PaginationStrategyBuilder<T> = SmartListPaginationStrategy<T>
 
 /// Central orchestrator for a paginated, searchable, cached list.
 ///
-/// `SmartListController` extends [ValueNotifier] so widgets can listen for
-/// state changes via the standard Flutter mechanisms
-/// ([ValueListenableBuilder], `context.watch`, etc.) without pulling in any
-/// third-party state-management library. The contained [SmartListState] is
-/// always immutable; mutations replace the value rather than mutating it.
+/// `SmartListController` is a [ChangeNotifier] that implements
+/// [ValueListenable] of [SmartListState], so widgets can subscribe via
+/// `ValueListenableBuilder(valueListenable: controller, ...)` exactly as
+/// before. The state is exposed read-only through [value] (or the alias
+/// [state]) — there is no public setter, so external code cannot corrupt
+/// the controller's internal bookkeeping by writing to `controller.value`.
 ///
 /// Concerns are split into pluggable collaborators:
 ///
@@ -42,7 +43,8 @@ typedef PaginationStrategyBuilder<T> = SmartListPaginationStrategy<T>
 /// All collaborators are injected and replaceable, so the controller stays
 /// free of concrete dependencies on any particular cache, retry, or
 /// pagination scheme.
-class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
+class SmartListController<T> extends ChangeNotifier
+    implements ValueListenable<SmartListState<T>> {
   // ─── Injected collaborators ──────────────────────────────────────────────
 
   final SmartListFetcher<T> _fetcher;
@@ -52,6 +54,28 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   final Debouncer _searchDebouncer;
   final UniqueKeyExtractor<T>? _uniqueKey;
   final bool _useCache;
+
+  // ─── State ───────────────────────────────────────────────────────────────
+
+  SmartListState<T> _state;
+
+  /// The current state snapshot. Implements [ValueListenable] so widgets
+  /// can subscribe via `ValueListenableBuilder(valueListenable: controller)`.
+  @override
+  SmartListState<T> get value => _state;
+
+  /// Alias for [value]. Provided for readability when the controller is
+  /// used outside a `ValueListenableBuilder`.
+  SmartListState<T> get state => _state;
+
+  /// Internal state writer — replaces the snapshot and notifies listeners
+  /// only when something actually changed. The setter is private so
+  /// external code cannot bypass the controller's bookkeeping.
+  void _set(SmartListState<T> next) {
+    if (identical(_state, next)) return;
+    _state = next;
+    notifyListeners();
+  }
 
   // ─── Internal bookkeeping ────────────────────────────────────────────────
 
@@ -94,15 +118,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     RetryPolicy? retryPolicy,
     Duration searchDebounce = const Duration(milliseconds: 300),
     UniqueKeyExtractor<T>? uniqueKey,
-    bool enableCache = true,
   })  : _fetcher = fetcher,
         _strategyBuilder = strategyBuilder,
-        _cache = enableCache ? (cache ?? MemoryCacheStore<T>()) : null,
+        _cache = cache,
         _retryPolicy = retryPolicy ?? RetryPolicy(),
         _searchDebouncer = Debouncer(delay: searchDebounce),
         _uniqueKey = uniqueKey,
-        _useCache = enableCache,
-        super(SmartListState<T>.initial()) {
+        _useCache = cache != null,
+        _state = SmartListState<T>.initial() {
     _normalStrategy = _strategyBuilder();
   }
 
@@ -118,7 +141,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       fetcher: fetcher,
       strategyBuilder: () => PagePaginationStrategy<T>(pageSize: pageSize),
       uniqueKey: uniqueKey,
-      enableCache: enableCache,
+      cache: enableCache ? MemoryCacheStore<T>() : null,
     );
   }
 
@@ -225,14 +248,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     _lastSearchPage = null;
     _searchSeen = null;
 
-    value = value.copyWith(
+    _set(value.copyWith(
       items: List<T>.unmodifiable(restoredItems),
       phase: SmartListPhase.success,
       hasReachedEnd: restoredEnd,
       clearError: true,
       clearStackTrace: true,
       clearQuery: true,
-    );
+    ));
   }
 
   /// Replace filters and re-fetch from page 1.
@@ -274,9 +297,9 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   /// only meaningful for the visible list) and is not replayed.
   void insertAtTop(T item) {
     if (_disposed) return;
-    value = value.copyWith(
+    _set(value.copyWith(
       items: List<T>.unmodifiable(<T>[item, ...value.items]),
-    );
+    ));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[item, ..._preSearchItems!];
     }
@@ -288,9 +311,9 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   /// it survives [clearSearch].
   void insertAtBottom(T item) {
     if (_disposed) return;
-    value = value.copyWith(
+    _set(value.copyWith(
       items: List<T>.unmodifiable(<T>[...value.items, item]),
-    );
+    ));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[..._preSearchItems!, item];
     }
@@ -307,7 +330,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     final next = List<T>.of(value.items);
     final i = index.clamp(0, next.length);
     next.insert(i, item);
-    value = value.copyWith(items: List<T>.unmodifiable(next));
+    _set(value.copyWith(items: List<T>.unmodifiable(next)));
   }
 
   /// Remove all items matching [test]. Replayed against the pre-search
@@ -316,7 +339,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
   void removeWhere(bool Function(T item) test) {
     if (_disposed) return;
     final next = List<T>.of(value.items)..removeWhere(test);
-    value = value.copyWith(items: List<T>.unmodifiable(next));
+    _set(value.copyWith(items: List<T>.unmodifiable(next)));
     if (_preSearchItems != null) {
       _preSearchItems = List<T>.of(_preSearchItems!)..removeWhere(test);
     }
@@ -329,7 +352,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     final next = <T>[
       for (final item in value.items) test(item) ? update(item) : item,
     ];
-    value = value.copyWith(items: List<T>.unmodifiable(next));
+    _set(value.copyWith(items: List<T>.unmodifiable(next)));
     if (_preSearchItems != null) {
       _preSearchItems = <T>[
         for (final item in _preSearchItems!) test(item) ? update(item) : item,
@@ -350,7 +373,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     _lastSearchPage = null;
     _normalSeen = null;
     _searchSeen = null;
-    value = SmartListState<T>.initial();
+    _set(SmartListState<T>.initial());
   }
 
   /// Drop the entire cache (if any). Does not change the visible state.
@@ -367,7 +390,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     }
     _searchStrategy = _strategyBuilder();
     _lastSearchPage = null;
-    value = value.copyWith(
+    _set(value.copyWith(
       query: query,
       items: const [],
       phase: SmartListPhase.loading,
@@ -375,7 +398,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       clearError: true,
       clearStackTrace: true,
       retryAttempt: 0,
-    );
+    ));
     await _fetchNext();
   }
 
@@ -402,7 +425,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       _lastNormalPage = null;
     }
 
-    value = value.copyWith(
+    _set(value.copyWith(
       items: keepItems ? value.items : const [],
       phase: phase,
       hasReachedEnd: false,
@@ -410,7 +433,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
       clearError: true,
       clearStackTrace: true,
       retryAttempt: 0,
-    );
+    ));
     await _fetchNext(bypassCache: bypassCache);
   }
 
@@ -430,10 +453,10 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
 
     if (request == null) {
       // No more pages.
-      value = value.copyWith(
+      _set(value.copyWith(
         phase: SmartListPhase.success,
         hasReachedEnd: true,
-      );
+      ));
       return;
     }
 
@@ -442,7 +465,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     if (value.items.isNotEmpty &&
         value.phase != SmartListPhase.refreshing &&
         value.phase != SmartListPhase.loading) {
-      value = value.copyWith(phase: SmartListPhase.loadingMore);
+      _set(value.copyWith(phase: SmartListPhase.loadingMore));
     }
 
     final token = _requestToken.issue();
@@ -480,7 +503,7 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
           // newer request's state.
           if (_disposed) return;
           if (!_requestToken.isCurrent(token)) return;
-          value = value.copyWith(retryAttempt: attempt);
+          _set(value.copyWith(retryAttempt: attempt));
         },
         shouldContinue: () => !_disposed && _requestToken.isCurrent(token),
       );
@@ -503,11 +526,11 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
     } catch (e, st) {
       if (e is SmartListCancelledException) return;
       if (!_requestToken.isCurrent(token)) return;
-      value = value.copyWith(
+      _set(value.copyWith(
         phase: SmartListPhase.error,
         error: e,
         stackTrace: st,
-      );
+      ));
     }
   }
 
@@ -542,14 +565,14 @@ class SmartListController<T> extends ValueNotifier<SmartListState<T>> {
         ? _mergeItems(const [], page.items, isSearch: isSearch)
         : _mergeItems(value.items, page.items, isSearch: isSearch);
 
-    value = value.copyWith(
+    _set(value.copyWith(
       items: List<T>.unmodifiable(merged),
       phase: SmartListPhase.success,
       hasReachedEnd: reachedEnd,
       clearError: true,
       clearStackTrace: true,
       retryAttempt: 0,
-    );
+    ));
   }
 
   /// Merge new page items into existing items, deduplicating by [_uniqueKey]

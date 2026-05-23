@@ -86,7 +86,6 @@ void main() {
       fetcher: failingSrc,
       strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
       retryPolicy: RetryPolicy.none(),
-      enableCache: false,
     );
 
     await tester.pumpWidget(
@@ -118,7 +117,6 @@ void main() {
       fetcher: src,
       strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
       searchDebounce: Duration.zero,
-      enableCache: false,
     );
 
     await tester.pumpWidget(
@@ -149,7 +147,6 @@ void main() {
       fetcher: src,
       strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
       retryPolicy: RetryPolicy.none(),
-      enableCache: false,
     );
 
     await tester.pumpWidget(
@@ -188,7 +185,6 @@ void main() {
       fetcher: src,
       strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
       retryPolicy: RetryPolicy.none(),
-      enableCache: false,
     );
 
     await tester.pumpWidget(
@@ -228,7 +224,6 @@ void main() {
       fetcher: src,
       strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
       retryPolicy: RetryPolicy.none(),
-      enableCache: false,
     );
 
     await tester.pumpWidget(

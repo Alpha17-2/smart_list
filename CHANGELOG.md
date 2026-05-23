@@ -4,6 +4,63 @@ All notable changes to this package are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.0 — 2026-05-24
+
+### Breaking changes
+
+- **`SmartListController` no longer extends `ValueNotifier`.** It now
+  extends `ChangeNotifier` and implements
+  `ValueListenable<SmartListState<T>>`. Reads via `controller.value`
+  (or the new alias `controller.state`) still work; subscribing via
+  `ValueListenableBuilder(valueListenable: controller, ...)` still
+  works. The breaking part: `controller.value = X` no longer compiles
+  — external code can no longer corrupt internal bookkeeping by
+  writing the state directly. Use the mutation APIs (`insertAtTop`,
+  `applyFilters`, `refresh`, `reset`, etc.) instead.
+
+- **`SmartListController(...)` no longer accepts `enableCache:`.**
+  The full constructor now takes a single `cache:` parameter:
+  - `cache: null` (or omitted) → no cache.
+  - `cache: someStore` → use that store.
+
+  Anyone previously using `enableCache: false` should drop the line;
+  anyone relying on the implicit default cache should add
+  `cache: MemoryCacheStore<T>()` explicitly. The convenience factory
+  `SmartListController.simple` still accepts `enableCache: true` for
+  the common case.
+
+### Fixed
+
+A full sweep of correctness, concurrency, ergonomics, and
+documentation issues identified during code review. Highlights:
+
+- hashCode/equals contract for `SmartListState` and `SmartListCacheKey`
+  (no more silent cache misses).
+- `RetryPolicy.run` honours cancellation and is safe across dispose.
+- `_bypassCacheReadOnce` race fixed by threading bypass per-call.
+- `SmartListView` separator off-by-one corrected.
+- Pending debounced searches are cancelled on `refresh` /
+  `loadInitial(force)` / `applyFilters`.
+- `applyFilters` emits a single coherent state transition instead of
+  flashing an intermediate snapshot.
+- Concurrent `loadNextPage` calls are now serialized; the same page
+  cannot be appended twice.
+- Scroll handler skips notifications fired before the list has any
+  scrollable extent.
+- `_mergeItems` runs in O(M) (persisted seen-set per phase).
+- New `loadMoreErrorBuilder` slot — inline pagination errors are no
+  longer rendered with the full-screen error widget.
+- Pull-to-refresh works on every placeholder state (loading / error
+  / empty) via a viewport-tall scrollable wrapper.
+- `Debouncer(Duration.zero)` now schedules asynchronously so callers
+  can invoke `run` from inside a build pass safely.
+- `clearSearch` preserves `insertAtTop` / `removeWhere` /
+  `updateWhere` mutations made while a search was active.
+- New `insertAtBottom` method; reverse-list (chat) semantics
+  documented.
+- `SmartListPage.empty()` sets `totalCount: null` (unknown), not 0.
+- README and CHANGELOG inaccuracies corrected.
+
 ## 0.0.1 — 2026-05-02
 
 Initial release. A unified, production-ready abstraction for paginated,
