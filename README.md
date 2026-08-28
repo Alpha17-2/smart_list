@@ -1,7 +1,7 @@
 # SmartList
 
 > Paginated, searchable Flutter lists with retries, cache, and cancelable fetches.
-> Use `SmartListView` or `SmartListSliver` inside a `CustomScrollView`.
+> Use `SmartListView`, or `SmartListSliver` inside a `CustomScrollView`.
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-02569B?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart)](https://dart.dev)
@@ -84,6 +84,8 @@ SmartListView<Post>(
 );
 ```
 
+That's it. You now have a list with infinite scroll, pull-to-refresh, loading/empty/error states, and an in-memory cache (5-minute TTL by default — pass your own `MemoryCacheStore(ttl: …)` or a custom `SmartListCacheStore` via the full constructor to tune it).
+
 For `CustomScrollView`, use `SmartListSliver` in `slivers:` (wrap the scroll view in `RefreshIndicator` yourself).
 
 ---
@@ -125,7 +127,7 @@ SmartListView<Product>(
 );
 ```
 
-Need *complete* control? Skip `SmartListView` and use the controller directly — it's a `ValueNotifier`, so it works with any UI you like:
+Need *complete* control? Skip `SmartListView` and use the controller directly — it implements `ValueListenable`, so it works with any UI you like:
 
 ```dart
 ValueListenableBuilder<SmartListState<Product>>(
@@ -141,7 +143,16 @@ ValueListenableBuilder<SmartListState<Product>>(
 
 ## Pagination styles
 
-Pick whichever your backend uses:
+`SmartListController.simple` hard-codes page-based pagination. To use cursor or offset, build the controller with the full constructor and supply a `strategyBuilder`:
+
+```dart
+SmartListController<MyItem>(
+  fetcher: myFetcher,
+  strategyBuilder: () => CursorPaginationStrategy<MyItem>(pageSize: 20),
+);
+```
+
+Available strategies:
 
 ```dart
 // Page-based: ?page=1&size=20  (this is the default in `.simple`)
@@ -193,7 +204,7 @@ Pass an empty map to clear them. The fetcher gets them through `req.filters`.
 
 ## Plays well with every state-management library
 
-`SmartListController` is a plain `ValueNotifier` — Provider, Riverpod, GetX, BLoC, and `setState` all consume it without an adapter. The only rule: dispose it when its scope dies.
+`SmartListController` is a `ChangeNotifier` that implements `ValueListenable` — Provider, Riverpod, GetX, BLoC, and `setState` all consume it without an adapter. The only rule: dispose it when its scope dies.
 
 ```dart
 // Provider
@@ -226,12 +237,14 @@ controller.search('flutter');        // debounced search
 controller.clearSearch();            // restore pre-search list
 controller.applyFilters({...});      // change filters & refetch
 controller.insertAtTop(item);
+controller.insertAtBottom(item);
 controller.insertAtIndex(i, item);
 controller.updateWhere(test, fn);
 controller.removeWhere(test);
 controller.reset();                  // wipe state
 controller.clearCache();
 controller.value;                    // current SmartListState<T>
+controller.state;                    // alias for value
 controller.addListener(() => …);     // it's a ChangeNotifier
 ```
 

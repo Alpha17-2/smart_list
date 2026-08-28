@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_list/smart_list.dart';
 
@@ -414,6 +415,386 @@ void main() {
       expect(c.value.filters, {'status': 'open'});
       c.dispose();
     });
+
+    test('applyFilters does not emit a stale intermediate snapshot (#10)',
+        () async {
+      // Pre-fix: applyFilters wrote `{new filters, old phase, OLD items}`
+      // first, then fired the loading transition. Listeners briefly saw the
+      // new filters paired with the *previous* result set — flashing UI.
+      // Post-fix: filters are folded into the loading-transition snapshot,
+      // so new-filters and old-items can never co-occur.
+      var page = 1;
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
+        // Page A is [1, 2]; page B (filtered) is [9].
+        if (req.filters.containsKey('status')) {
+          return const SmartListPage<int>(items: [9], hasMore: false);
+        }
+        page++;
+        return const SmartListPage<int>(items: [1, 2], hasMore: false);
+      }
+
+      final c = SmartListController<int>.simple(
+        fetcher: src,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2]);
+
+      final snapshots = <(Map<String, dynamic>, List<int>)>[];
+      void listener() =>
+          snapshots.add((c.value.filters, List<int>.from(c.value.items)));
+      c.addListener(listener);
+
+      await c.applyFilters({'status': 'open'});
+      c.removeListener(listener);
+
+      for (final (filters, items) in snapshots) {
+        // The forbidden intermediate: new filters but stale [1, 2] items.
+        final isStaleIntermediate =
+            filters.containsKey('status') && const [1, 2].toString() == items.toString();
+        expect(isStaleIntermediate, isFalse,
+            reason: 'new filters must never co-occur with the previous '
+                'result set ($filters paired with $items)');
+      }
+      expect(c.value.items, [9]);
+      expect(page, greaterThan(1));
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — bypass flag isolation (#7)', () {
+    test('bypassCache is per-call (no controller-wide leakage)', () async {
+      // Pre-fix: bypass was a controller-wide bool, so a fetch that ran
+      // between `refresh(bypassCache: true)` setting the flag and refresh
+      // actually consuming it would steal the bypass. The fix threads
+      // bypass as a parameter — invoking back-to-back refreshes with
+      // different bypass intents must each see its own intent.
+      var hits = 0;
+      Future<SmartListPage<int>> src(SmartListPageRequest _, SmartListCancelToken cancel) async {
+        hits++;
+        return const SmartListPage<int>(items: [1, 2, 3], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        cache: MemoryCacheStore<int>(),
+      );
+      await c.loadInitial();
+      final afterInitial = hits;
+
+      await c.refresh(bypassCache: true);
+      expect(hits, afterInitial + 1, reason: 'first refresh hits network');
+
+      await c.refresh(bypassCache: false);
+      expect(hits, afterInitial + 1,
+          reason: 'second refresh must serve from cache; the prior '
+              'bypass intent must not linger on a controller-wide flag');
+
+      await c.refresh(bypassCache: true);
+      expect(hits, afterInitial + 2,
+          reason: 'third refresh hits network again under its own intent');
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — debounce cancellation (#9)', () {
+    test('loadInitial(force) cancels a pending debounced search', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: const Duration(milliseconds: 50),
+      );
+      await c.loadInitial();
+
+      // Queue a debounced search, then immediately force-reload before the
+      // debounce window elapses. The pending search must not fire afterwards.
+      c.search('1');
+      await c.loadInitial(force: true);
+
+      // Wait past the debounce window to make sure no late search fires.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(c.value.isSearchActive, isFalse);
+      expect(c.value.query, isNull);
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+      c.dispose();
+    });
+
+    test('refresh cancels a pending debounced search', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: const Duration(milliseconds: 50),
+      );
+      await c.loadInitial();
+
+      c.search('1');
+      await c.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(c.value.isSearchActive, isFalse);
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — retry cancellation (#6)', () {
+    test('disposing the controller mid-retry aborts the chain cleanly',
+        () async {
+      final src = _FakeSource(totalItems: 5);
+      src.failuresLeft = 10;
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
+        retryPolicy: RetryPolicy(
+          maxAttempts: 10,
+          baseDelay: const Duration(milliseconds: 30),
+        ),
+      );
+
+      final loadFuture = c.loadInitial();
+      // Allow the first failure to land and a retry to be scheduled.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      c.dispose();
+
+      // Awaiting after dispose must not throw 'used after disposed'.
+      await loadFuture;
+
+      // Give any further (now-cancelled) retries time to *not* fire.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      // No assertion on internal state — passing without throwing is the
+      // contract.
+    });
+  });
+
+  group('SmartListController — clearSearch preserves real-time edits (#20)',
+      () {
+    test('insertAtTop during search survives clearSearch', () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
+        searchDebounce: Duration.zero,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3, 4, 5]);
+
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(c.value.isSearchActive, isTrue);
+
+      // Insert a brand-new item while in search mode. Pre-fix: this was
+      // silently dropped by `clearSearch` when the snapshot was restored.
+      c.insertAtTop(99);
+
+      c.clearSearch();
+      expect(c.value.isSearchActive, isFalse);
+      // The inserted item is preserved at the top of the restored list.
+      expect(c.value.items.first, 99);
+      expect(c.value.items.contains(99), isTrue);
+      c.dispose();
+    });
+
+    test('removeWhere during search is replayed against the snapshot',
+        () async {
+      final src = _FakeSource(
+        totalItems: 5,
+        matcher: (i, q) => q == null || i.toString().contains(q),
+      );
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 100),
+        searchDebounce: Duration.zero,
+      );
+      await c.loadInitial();
+
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      // Remove a value that's also in the pre-search snapshot.
+      c.removeWhere((i) => i == 1);
+
+      c.clearSearch();
+      expect(c.value.items.contains(1), isFalse,
+          reason: 'removeWhere during search must affect snapshot too');
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — insertAtBottom (#21)', () {
+    test('appends to the data list', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+      );
+      await c.loadInitial();
+      c.insertAtBottom(99);
+      expect(c.value.items, [1, 2, 3, 99]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — reset (#27)', () {
+    test('reset drops items, filters, and search state', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      await c.applyFilters({'k': 'v'});
+      expect(c.value.filters, isNotEmpty);
+
+      c.reset();
+      expect(c.value.items, isEmpty);
+      expect(c.value.filters, isEmpty);
+      expect(c.value.phase, SmartListPhase.initial);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — applyFilters short-circuit (#27)', () {
+    test('passing unchanged filters does not re-fetch', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      await c.applyFilters({'k': 'v'});
+      final before = src.callCount;
+
+      // Same filters, different map identity — must short-circuit.
+      await c.applyFilters({'k': 'v'});
+      expect(src.callCount, before,
+          reason: 'unchanged filters must not trigger a fetch');
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — pagination serialization (#11)', () {
+    test('concurrent loadNextPage calls do not double-append', () async {
+      // Slow fetcher so we can fire many concurrent calls while the first
+      // is still in flight — pre-fix, the token-check let them all run
+      // and append duplicate pages.
+      final src = _FakeSource(totalItems: 6);
+      src.latency = const Duration(milliseconds: 40);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 3,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+
+      // Fire five concurrent loadNextPage calls. With the lock, only one
+      // hits the network and the others await its result.
+      final hitsBefore = src.callCount;
+      await Future.wait(List.generate(5, (_) => c.loadNextPage()));
+
+      // Exactly one network call must have fired for page 2.
+      expect(src.callCount - hitsBefore, 1);
+      expect(c.value.items, [1, 2, 3, 4, 5, 6]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — dedupe seen-set (#24)', () {
+    test('seen-set survives across pages with uniqueKey', () async {
+      // Same dedupe contract as before — just verifies the persisted
+      // seen-set still produces correct output after multiple appends.
+      var page = 0;
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
+        page++;
+        if (page == 1) return const SmartListPage(items: [1, 2, 3], hasMore: true);
+        if (page == 2) return const SmartListPage(items: [3, 4, 5], hasMore: true);
+        return const SmartListPage(items: [5, 6], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
+        uniqueKey: (i) => i,
+      );
+      await c.loadInitial();
+      await c.loadNextPage();
+      await c.loadNextPage();
+      expect(c.value.items, [1, 2, 3, 4, 5, 6]);
+      c.dispose();
+    });
+
+    test('refresh resets the seen-set (no cross-sequence leakage)', () async {
+      // After refresh, the same items must be allowed back in — the seen
+      // set from the prior sequence cannot suppress them.
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async =>
+          const SmartListPage(items: [1, 2, 3], hasMore: false);
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
+        uniqueKey: (i) => i,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+      await c.refresh();
+      expect(c.value.items, [1, 2, 3]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — ChangeNotifier interop (#16)', () {
+    test('is usable as a ValueListenable<SmartListState>', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+      );
+
+      // The controller satisfies ValueListenable<SmartListState<T>> so
+      // existing `ValueListenableBuilder(valueListenable: controller, ...)`
+      // call sites continue to work after the ChangeNotifier migration.
+      final ValueListenable<SmartListState<int>> asListenable = c;
+      expect(asListenable.value.phase, SmartListPhase.initial);
+
+      await c.loadInitial();
+      expect(asListenable.value.items, [1, 2, 3]);
+
+      // `state` is the readable alias for `value`.
+      expect(c.state, same(asListenable.value));
+      c.dispose();
+    });
+
+    test('listeners fire on state change exactly once per coherent update',
+        () async {
+      Future<SmartListPage<int>> src(SmartListPageRequest _, SmartListCancelToken cancel) async =>
+          const SmartListPage<int>(items: [1, 2], hasMore: false);
+      final c = SmartListController<int>.simple(fetcher: src, pageSize: 10);
+
+      var notifies = 0;
+      c.addListener(() => notifies++);
+
+      await c.loadInitial();
+      // At minimum, the loading-transition snapshot and the success
+      // snapshot should each fire; the controller must not stop firing.
+      expect(notifies, greaterThanOrEqualTo(2));
+      c.dispose();
+    });
   });
 
   group('SmartListController — load-more failure', () {
@@ -435,7 +816,6 @@ void main() {
         fetcher: src,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
         retryPolicy: RetryPolicy.none(),
-        enableCache: false,
       );
       await c.loadInitial();
       expect(c.value.items, [1, 2, 3]);
@@ -495,7 +875,6 @@ void main() {
         fetcher: src,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
         searchDebounce: Duration.zero,
-        enableCache: false,
       );
       await c.loadInitial();
       expect(c.value.items, [1, 2, 3]);
@@ -627,7 +1006,6 @@ void main() {
         fetcher: src,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
         searchDebounce: Duration.zero,
-        enableCache: false,
       );
       await c.loadInitial();
       c.search('1');

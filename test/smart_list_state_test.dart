@@ -78,5 +78,20 @@ void main() {
       expect(a, b);
       expect(a == c, isFalse);
     });
+
+    test('hashCode is equal for equal filters (==/hashCode contract)', () {
+      // Regression for #5: previously used hashAllUnordered(filters.entries),
+      // which broke the contract because MapEntry has no value equality.
+      final a = SmartListState<int>(
+        items: const [1, 2],
+        filters: const {'status': 'open', 'limit': 10},
+      );
+      final b = SmartListState<int>(
+        items: const [1, 2],
+        filters: const {'limit': 10, 'status': 'open'},
+      );
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+    });
   });
 }

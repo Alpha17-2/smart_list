@@ -39,6 +39,8 @@ class SmartListCacheKey {
         query,
         page,
         cursor,
+        // Pair each key with its value. Hashing keys and values as two
+        // independent unordered lists can collide across swapped maps.
         Object.hashAllUnordered(
           filters.keys.map((k) => Object.hash(k, filters[k])),
         ),

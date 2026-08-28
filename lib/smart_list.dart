@@ -2,7 +2,7 @@
 /// searchable, cached lists in Flutter.
 ///
 /// See the package README and the `example/` app for end-to-end usage.
-/// The 2-line "happy path":
+/// The happy path:
 ///
 /// ```dart
 /// final controller = SmartListController.simple(
