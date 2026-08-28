@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -13,12 +14,11 @@ class SmartListExampleApp extends StatelessWidget {
     return MaterialApp(
       title: 'SmartList Example',
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-      home: const PostsPage(),
+      home: const ExampleHome(),
     );
   }
 }
 
-// A model. In a real app this would come from your API layer.
 class Post {
   final int id;
   final String title;
@@ -26,10 +26,6 @@ class Post {
   Post({required this.id, required this.title, required this.body});
 }
 
-/// A fake paginated API to exercise the controller. It demonstrates:
-///   * page-based pagination with a known total
-///   * server-side search (case-insensitive substring)
-///   * artificial latency + occasional flaky errors
 class FakePostsApi {
   final List<Post> _all = List<Post>.generate(
     87,
@@ -41,12 +37,15 @@ class FakePostsApi {
   );
   final _rng = Random();
 
-  Future<SmartListPage<Post>> fetch(SmartListPageRequest req) async {
+  Future<SmartListPage<Post>> fetch(
+    SmartListPageRequest req,
+    SmartListCancelToken cancel,
+  ) async {
     await Future<void>.delayed(const Duration(milliseconds: 600));
+    cancel.throwIfCancelled();
 
-    // Simulate occasional transient failure to exercise retry/error UI.
     if (_rng.nextInt(20) == 0) {
-      throw Exception('Network glitch — please retry');
+      throw TimeoutException('Network glitch — please retry');
     }
 
     Iterable<Post> source = _all;
@@ -56,29 +55,65 @@ class FakePostsApi {
     }
 
     final list = source.toList();
-    final start = (req.page - 1) * req.pageSize;
+    final start = req.cursor != null
+        ? int.parse(req.cursor!)
+        : (req.page - 1) * req.pageSize;
     if (start >= list.length) return const SmartListPage(items: []);
     final end = (start + req.pageSize).clamp(0, list.length);
     final slice = list.sublist(start, end);
+    final hasMore = end < list.length;
     return SmartListPage<Post>(
       items: slice,
-      hasMore: end < list.length,
+      hasMore: hasMore,
+      nextCursor: hasMore ? '$end' : null,
       totalCount: list.length,
     );
   }
 }
 
-class PostsPage extends StatefulWidget {
-  const PostsPage({super.key});
+class ExampleHome extends StatelessWidget {
+  const ExampleHome({super.key});
 
   @override
-  State<PostsPage> createState() => _PostsPageState();
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('SmartList 1.0'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'ListView'),
+              Tab(text: 'Sliver'),
+            ],
+          ),
+        ),
+        body: const TabBarView(
+          children: [
+            PostsListTab(),
+            PostsSliverTab(),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _PostsPageState extends State<PostsPage> {
+class PostsListTab extends StatefulWidget {
+  const PostsListTab({super.key});
+
+  @override
+  State<PostsListTab> createState() => _PostsListTabState();
+}
+
+class _PostsListTabState extends State<PostsListTab>
+    with AutomaticKeepAliveClientMixin {
   final _api = FakePostsApi();
   late final SmartListController<Post> _controller;
   final _searchController = TextEditingController();
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -87,6 +122,7 @@ class _PostsPageState extends State<PostsPage> {
       fetcher: _api.fetch,
       pageSize: 15,
       uniqueKey: (p) => p.id,
+      listId: 'posts-list',
     );
   }
 
@@ -99,57 +135,118 @@ class _PostsPageState extends State<PostsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('SmartList demo'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(56),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search posts…',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: ValueListenableBuilder(
-                  valueListenable: _controller,
-                  builder: (_, state, __) {
-                    if (!state.isSearchActive) return const SizedBox.shrink();
-                    return IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        _controller.clearSearch();
-                      },
-                    );
-                  },
-                ),
-                filled: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
+    super.build(context);
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'Search posts…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: ValueListenableBuilder(
+                valueListenable: _controller,
+                builder: (_, state, __) {
+                  if (!state.isSearchActive) return const SizedBox.shrink();
+                  return IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _searchController.clear();
+                      _controller.clearSearch();
+                    },
+                  );
+                },
               ),
-              onChanged: _controller.search,
+              filled: true,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            onChanged: _controller.search,
+          ),
+        ),
+        Expanded(
+          child: SmartListView<Post>(
+            controller: _controller,
+            emptyBuilder: (context) {
+              return const Center(
+                child: Text('No posts found. Try a different search?'),
+              );
+            },
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, post, __) => ListTile(
+              leading: CircleAvatar(child: Text('${post.id}')),
+              title: Text(post.title),
+              subtitle: Text(
+                post.body,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
         ),
-      ),
-      body: SmartListView<Post>(
-        controller: _controller,
-        emptyBuilder: (context) {
-          return const Center(
-            child: Text('No posts found. Try a different search?'),
-          );
-        },
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (_, post, __) => ListTile(
-          leading: CircleAvatar(child: Text('${post.id}')),
-          title: Text(post.title),
-          subtitle:
-              Text(post.body, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
+      ],
+    );
+  }
+}
+
+class PostsSliverTab extends StatefulWidget {
+  const PostsSliverTab({super.key});
+
+  @override
+  State<PostsSliverTab> createState() => _PostsSliverTabState();
+}
+
+class _PostsSliverTabState extends State<PostsSliverTab>
+    with AutomaticKeepAliveClientMixin {
+  final _api = FakePostsApi();
+  late final SmartListController<Post> _controller;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = SmartListController<Post>(
+      fetcher: _api.fetch,
+      strategyBuilder: () => CursorPaginationStrategy<Post>(pageSize: 15),
+      uniqueKey: (p) => p.id,
+      listId: 'posts-sliver',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return RefreshIndicator(
+      onRefresh: _controller.refresh,
+      child: CustomScrollView(
+        slivers: [
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Cursor pagination inside CustomScrollView'),
+            ),
+          ),
+          SmartListSliver<Post>(
+            controller: _controller,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, post, __) => ListTile(
+              leading: CircleAvatar(child: Text('${post.id}')),
+              title: Text(post.title),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -8,7 +8,6 @@ class CursorPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   @override
   final int pageSize;
 
-  String? _nextCursor;
   int _nextPage = 1;
 
   /// Create a cursor strategy with the given [pageSize] hint (default 20).
@@ -17,9 +16,8 @@ class CursorPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   @override
   SmartListPageRequest initialRequest({
     String? query,
-    Map<String, dynamic> filters = const {},
+    Map<String, Object?> filters = const {},
   }) {
-    _nextCursor = null;
     _nextPage = 1;
     return SmartListPageRequest(
       page: _nextPage,
@@ -35,15 +33,13 @@ class CursorPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   SmartListPageRequest? nextRequest(
     SmartListPage<T> previousResponse, {
     String? query,
-    Map<String, dynamic> filters = const {},
+    Map<String, Object?> filters = const {},
   }) {
     if (isExhausted(previousResponse)) return null;
-    _nextCursor = previousResponse.nextCursor;
-    _nextPage += 1;
     return SmartListPageRequest(
       page: _nextPage,
       pageSize: pageSize,
-      cursor: _nextCursor,
+      cursor: previousResponse.nextCursor,
       offset: 0,
       query: query,
       filters: filters,
@@ -51,15 +47,20 @@ class CursorPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   }
 
   @override
+  void commit(SmartListPageRequest request, SmartListPage<T> response) {
+    _nextPage = request.page + 1;
+  }
+
+  @override
   void reset() {
-    _nextCursor = null;
     _nextPage = 1;
   }
 
   @override
   bool isExhausted(SmartListPage<T> response) {
-    if (response.hasMore != null) return !response.hasMore!;
-    // Cursor APIs typically signal end via `nextCursor == null`.
+    // Explicit "no more" always wins. `hasMore: true` without a cursor cannot
+    // be followed (repeating cursor: null would re-fetch page 1 forever).
+    if (response.hasMore == false) return true;
     return response.nextCursor == null;
   }
 }

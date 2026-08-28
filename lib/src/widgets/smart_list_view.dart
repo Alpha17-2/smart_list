@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../controller/smart_list_controller.dart';
 import '../core/smart_list_state.dart';
 import 'default_state_builders.dart';
+import 'load_more_gate.dart';
 
 /// Drop-in list widget that binds to a [SmartListController] and renders the
 /// appropriate UI for every state (loading, error, empty, populated).
@@ -27,6 +28,7 @@ class SmartListView<T> extends StatefulWidget {
   final SmartListSearchEmptyBuilder? searchEmptyBuilder;
   final SmartListErrorBuilder? errorBuilder;
   final SmartListFooterBuilder<T>? footerBuilder;
+  final SmartListWidgetBuilder? searchLoadingBuilder;
 
   /// Whether to wrap the list in a [RefreshIndicator] for pull-to-refresh.
   final bool enableRefresh;
@@ -49,6 +51,8 @@ class SmartListView<T> extends StatefulWidget {
   /// items load by scrolling up. Forwarded directly to [ListView.reverse].
   final bool reverse;
 
+  final double? cacheExtent;
+
   const SmartListView({
     super.key,
     required this.controller,
@@ -60,12 +64,14 @@ class SmartListView<T> extends StatefulWidget {
     this.searchEmptyBuilder,
     this.errorBuilder,
     this.footerBuilder,
+    this.searchLoadingBuilder,
     this.enableRefresh = true,
     this.loadMoreThreshold = 240,
     this.padding,
     this.physics,
     this.scrollController,
     this.reverse = false,
+    this.cacheExtent,
   });
 
   @override
@@ -74,6 +80,7 @@ class SmartListView<T> extends StatefulWidget {
 
 class _SmartListViewState<T> extends State<SmartListView<T>> {
   ScrollController? _internalController;
+  final LoadMoreGate _loadMoreGate = LoadMoreGate();
 
   ScrollController get _controller =>
       widget.scrollController ?? (_internalController ??= ScrollController());
@@ -91,6 +98,7 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
     // `loadInitial()` is a safe no-op when the new controller already has
     // items, so it's fine to call unconditionally on identity change.
     if (!identical(oldWidget.controller, widget.controller)) {
+      _loadMoreGate.reset();
       _scheduleInitialLoad(widget.controller);
     }
   }
@@ -115,9 +123,11 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
 
   bool _onScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
+    final state = widget.controller.value;
+    if (state.isBusy || state.hasReachedEnd) return false;
     final remaining =
         notification.metrics.maxScrollExtent - notification.metrics.pixels;
-    if (remaining <= widget.loadMoreThreshold) {
+    if (_loadMoreGate.shouldLoadMore(remaining, widget.loadMoreThreshold)) {
       widget.controller.loadNextPage();
     }
     return false;
@@ -129,6 +139,7 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
       valueListenable: widget.controller,
       builder: (context, state, _) {
         Widget child;
+        var showingList = false;
 
         if (state.isInitialLoading) {
           child = (widget.loadingBuilder ?? DefaultSmartListStates.loading)(
@@ -154,13 +165,37 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
             context,
           );
         } else {
+          showingList = true;
           child = _buildList(context, state);
         }
 
         if (!widget.enableRefresh) return child;
+        if (!showingList) {
+          // RefreshIndicator only receives overscroll from a scrollable.
+          child = _refreshableFill(child);
+        }
         return RefreshIndicator(
           onRefresh: widget.controller.refresh,
           child: child,
+        );
+      },
+    );
+  }
+
+  /// Full-viewport scrollable so [RefreshIndicator] works for non-list states.
+  Widget _refreshableFill(Widget child) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final minHeight = constraints.hasBoundedHeight &&
+                constraints.maxHeight.isFinite &&
+                constraints.maxHeight > 0
+            ? constraints.maxHeight
+            : MediaQuery.sizeOf(context).height;
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: minHeight, child: child),
+          ],
         );
       },
     );
@@ -170,8 +205,10 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
     final itemCount = state.items.length + 1; // +1 for footer slot
 
     Widget defaultFooter() {
-      if (state.isLoadingMore) {
-        return (widget.loadingMoreBuilder ??
+      if (state.isLoadingMore ||
+          (state.isSearchLoading && state.items.isNotEmpty)) {
+        return (widget.searchLoadingBuilder ??
+            widget.loadingMoreBuilder ??
             DefaultSmartListStates.loadingMore)(context);
       }
       if (state.hasError) {
@@ -194,6 +231,7 @@ class _SmartListViewState<T> extends State<SmartListView<T>> {
                 ? const AlwaysScrollableScrollPhysics()
                 : null),
         reverse: widget.reverse,
+        cacheExtent: widget.cacheExtent,
         itemCount: itemCount,
         separatorBuilder: (context, index) {
           if (index >= state.items.length - 1) return const SizedBox.shrink();

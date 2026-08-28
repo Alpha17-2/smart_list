@@ -15,40 +15,42 @@ class PagePaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   PagePaginationStrategy({this.pageSize = 20, this.initialPage = 1})
       : _nextPage = initialPage;
 
-  @override
-  SmartListPageRequest initialRequest({
+  SmartListPageRequest _requestFor({
+    required int page,
     String? query,
-    Map<String, dynamic> filters = const {},
+    Map<String, Object?> filters = const {},
   }) {
-    _nextPage = initialPage;
-    final req = SmartListPageRequest(
-      page: _nextPage,
-      pageSize: pageSize,
-      offset: 0,
-      query: query,
-      filters: filters,
-    );
-    _nextPage += 1;
-    return req;
-  }
-
-  @override
-  SmartListPageRequest? nextRequest(
-    SmartListPage<T> previousResponse, {
-    String? query,
-    Map<String, dynamic> filters = const {},
-  }) {
-    if (isExhausted(previousResponse)) return null;
-    final page = _nextPage;
-    final req = SmartListPageRequest(
+    return SmartListPageRequest(
       page: page,
       pageSize: pageSize,
       offset: (page - initialPage) * pageSize,
       query: query,
       filters: filters,
     );
-    _nextPage += 1;
-    return req;
+  }
+
+  @override
+  SmartListPageRequest initialRequest({
+    String? query,
+    Map<String, Object?> filters = const {},
+  }) {
+    _nextPage = initialPage;
+    return _requestFor(page: _nextPage, query: query, filters: filters);
+  }
+
+  @override
+  SmartListPageRequest? nextRequest(
+    SmartListPage<T> previousResponse, {
+    String? query,
+    Map<String, Object?> filters = const {},
+  }) {
+    if (isExhausted(previousResponse)) return null;
+    return _requestFor(page: _nextPage, query: query, filters: filters);
+  }
+
+  @override
+  void commit(SmartListPageRequest request, SmartListPage<T> response) {
+    _nextPage = request.page + 1;
   }
 
   @override

@@ -4,6 +4,51 @@ All notable changes to this package are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 — 2026-08-29
+
+First stable API. Core still depends only on Flutter.
+
+### Breaking
+- `SmartListFetcher` now receives `SmartListCancelToken` as the second argument.
+- Filters are `Map<String, Object?>` (`SmartListFilters`).
+- Default `RetryPolicy` retries only transient errors (timeouts / typical I/O type names), not every `Exception`. Use `RetryPolicy.aggressive()` for the old behaviour.
+- `SmartListCacheKey` includes optional `listId`; `invalidateScope` accepts `listId`.
+
+### Added
+- `SmartListCancelToken` — cooperative cancel on refresh/search/dispose.
+- `SmartListSliver` for `CustomScrollView`.
+- `listId` on `SmartListController` for shared cache stores.
+- Load-more fires on threshold **crossing**, not every scroll notification.
+- `uniqueKey` applies to inserts; mutations invalidate the current cache scope.
+- Search keeps previous items visible while a search fetch is in flight (`isSearchLoading`).
+- Example `JsonFileCacheStore` (not a core dependency).
+
+### Changed
+- Cache is documented as a fetch snapshot, not a live store.
+
+## 0.0.2 — 2026-08-28
+
+### Fixed
+- Pagination strategies now **peek** the next request and **commit** only after
+  a successful apply, so a failed "load more" retries the same page instead of
+  skipping it. The controller also reuses `_failedRequest` for custom
+  strategies that still mutate in `nextRequest`.
+- Bypass `refresh()` invalidates the current query+filters cache scope so later
+  pages cannot mix with a freshly fetched page 1. Added
+  `SmartListCacheStore.invalidateScope`.
+- Disposing the controller during an in-flight fetch no longer notifies a
+  disposed `ValueNotifier`.
+- Cursor paging treats `hasMore: true` with a null `nextCursor` as end-of-list
+  (avoids re-requesting page 1 forever).
+- `clearSearch()` after `applyFilters()` during a search refetches the browse
+  list instead of restoring a stale snapshot.
+- Empty / error / loading states are wrapped in a scrollable so pull-to-refresh
+  works when `enableRefresh` is true.
+
+### Added
+- `SmartListPaginationStrategy.commit` (default no-op; built-ins implement it).
+- `SmartListCacheStore.invalidateScope`.
+
 ## 0.0.1 — 2026-05-02
 
 Initial release. A unified, production-ready abstraction for paginated,

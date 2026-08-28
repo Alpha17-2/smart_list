@@ -56,6 +56,38 @@ void main() {
       );
     });
 
+    test('invalidateScope matches query and filters', () {
+      final store = MemoryCacheStore<int>();
+      final open = <String, dynamic>{'status': 'open'};
+      final closed = <String, dynamic>{'status': 'closed'};
+      store.write(
+        SmartListCacheKey(page: 1, filters: open),
+        SmartListPage<int>(items: const [1]),
+      );
+      store.write(
+        SmartListCacheKey(page: 2, filters: open),
+        SmartListPage<int>(items: const [2]),
+      );
+      store.write(
+        SmartListCacheKey(page: 1, filters: closed),
+        SmartListPage<int>(items: const [3]),
+      );
+      store.invalidateScope(filters: open);
+      expect(store.length, 1);
+      expect(
+        store.read(SmartListCacheKey(page: 1, filters: open)),
+        isNull,
+      );
+      expect(
+        store.read(SmartListCacheKey(page: 2, filters: open)),
+        isNull,
+      );
+      expect(
+        store.read(SmartListCacheKey(page: 1, filters: closed))!.items,
+        [3],
+      );
+    });
+
     test('clear empties the store', () {
       final store = MemoryCacheStore<int>();
       store.write(
@@ -66,9 +98,9 @@ void main() {
       expect(store.length, 0);
     });
 
-    test('cache keys with different filters are distinct', () {
-      const k1 = SmartListCacheKey(page: 1, filters: {'status': 'open'});
-      const k2 = SmartListCacheKey(page: 1, filters: {'status': 'closed'});
+    test('cache keys with different listIds are distinct', () {
+      const k1 = SmartListCacheKey(listId: 'a', page: 1);
+      const k2 = SmartListCacheKey(listId: 'b', page: 1);
       expect(k1 == k2, isFalse);
     });
   });

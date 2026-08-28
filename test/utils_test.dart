@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_list/smart_list.dart';
@@ -57,11 +59,35 @@ void main() {
       var calls = 0;
       final result = await policy.run<String>(() async {
         calls++;
-        if (calls < 3) throw Exception('flaky');
+        if (calls < 3) throw TimeoutException('flaky');
         return 'ok';
       });
       expect(result, 'ok');
       expect(calls, 3);
+    });
+
+    test('does not retry StateError by default', () async {
+      final policy = RetryPolicy(
+        maxAttempts: 5,
+        baseDelay: const Duration(milliseconds: 1),
+      );
+      var calls = 0;
+      await expectLater(
+        policy.run<int>(() async {
+          calls++;
+          throw StateError('not transient');
+        }),
+        throwsA(isA<StateError>()),
+      );
+      expect(calls, 1);
+    });
+
+    test('retries TimeoutException by default', () async {
+      final policy = RetryPolicy(
+        maxAttempts: 2,
+        baseDelay: const Duration(milliseconds: 1),
+      );
+      expect(policy.shouldRetry(TimeoutException('x'), 1), isTrue);
     });
 
     test('rethrows after maxAttempts', () async {
@@ -73,9 +99,9 @@ void main() {
       await expectLater(
         policy.run<int>(() async {
           calls++;
-          throw StateError('always');
+          throw TimeoutException('always');
         }),
-        throwsA(isA<StateError>()),
+        throwsA(isA<TimeoutException>()),
       );
       expect(calls, 2);
     });
@@ -95,6 +121,11 @@ void main() {
         throwsA(isA<StateError>()),
       );
       expect(calls, 1);
+    });
+
+    test('RetryPolicy.aggressive retries any error', () {
+      final p = RetryPolicy.aggressive();
+      expect(p.shouldRetry(StateError('x'), 1), isTrue);
     });
 
     test('RetryPolicy.none disables retries', () {

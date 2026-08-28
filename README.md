@@ -1,7 +1,7 @@
 # SmartList
 
-> A Flutter package that takes the headache out of building lists.
-> Pagination, search, pull-to-refresh, caching, retries, and clean loading/error states — all wired up for you in two lines of code.
+> Paginated, searchable Flutter lists with retries, cache, and cancelable fetches.
+> Use `SmartListView` or `SmartListSliver` inside a `CustomScrollView`.
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-02569B?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart)](https://dart.dev)
@@ -31,11 +31,11 @@ Every list screen ends up reinventing this. **SmartList does it once, properly, 
 | 🔍 **Search** | Built-in debouncing, automatic cancellation, restores previous list when you clear |
 | ⬇️ **Pull-to-refresh** | One flag — `enableRefresh: true` |
 | 🎨 **UI states** | Loading, empty, error, search-empty — all customisable, sensible defaults out of the box |
-| 💾 **Caching** | In-memory cache with TTL & LRU; pluggable for disk caches later |
-| 🔁 **Auto-retry** | Configurable exponential backoff with jitter |
-| 🛡️ **Race-safe** | Old responses can never overwrite newer ones |
-| 🧹 **No duplicates** | Optional `uniqueKey` collapses duplicates across pages |
-| 🪶 **Tiny** | One dependency: Flutter itself. No third-party state-management library required |
+| 💾 **Caching** | In-memory TTL/LRU; `listId` when sharing a store; disk via `SmartListCacheStore` (see `example/`) |
+| 🔁 **Auto-retry** | Transient I/O/timeouts by default; `RetryPolicy.aggressive()` retries everything |
+| 🛡️ **Race-safe** | Request tokens plus **cancel tokens** so superseded HTTP work can stop |
+| 🧹 **No duplicates** | Optional `uniqueKey` on pages and local inserts |
+| 🪶 **Tiny** | Core depends on Flutter only |
 
 ---
 
@@ -45,7 +45,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  smart_list: ^0.0.1
+  smart_list: ^1.0.0
 ```
 
 Then run:
@@ -65,14 +65,17 @@ flutter pub get
 
 ---
 
-## Quickstart — 2 lines, really
+## Quickstart
 
 ```dart
 import 'package:smart_list/smart_list.dart';
 
-// `Post` here is your own model class.
 final controller = SmartListController<Post>.simple(
-  fetcher: (req) async => SmartListPage(items: await api.getPosts(req.page)),
+  fetcher: (req, cancel) async {
+    final items = await api.getPosts(req.page);
+    cancel.throwIfCancelled();
+    return SmartListPage(items: items);
+  },
 );
 
 SmartListView<Post>(
@@ -81,7 +84,7 @@ SmartListView<Post>(
 );
 ```
 
-That's it. You now have a list with infinite scroll, pull-to-refresh, loading/empty/error states, and caching.
+For `CustomScrollView`, use `SmartListSliver` in `slivers:` (wrap the scroll view in `RefreshIndicator` yourself).
 
 ---
 
@@ -267,18 +270,17 @@ cd example
 flutter run
 ```
 
-It shows: pagination, debounced search, pull-to-refresh, simulated network errors with auto-retry, and a custom empty state.
+It shows ListView + search, a sliver/cursor tab, cancel-aware delayed fetches, and a copy-paste `JsonFileCacheStore` in `example/lib/json_file_cache_store.dart`.
 
 ---
 
-## Roadmap
+## Extending pagination / cache
 
-- [ ] Disk cache implementation (Hive / SQLite)
-- [ ] Sliver-native variant for `CustomScrollView` integrators
-- [ ] Hybrid local + remote search
-- [ ] Flutter DevTools timeline integration
+Prefer `extends SmartListPaginationStrategy` (and default methods on the cache store) so new APIs are not breaking. `implements` must re-declare every member including `commit`.
 
-PRs welcome.
+Filters are `Map<String, Object?>`.
+
+Post-1.0 (not in this package yet): hybrid local+remote search, DevTools overlay.
 
 ---
 

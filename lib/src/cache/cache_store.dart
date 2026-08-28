@@ -17,6 +17,13 @@ abstract class SmartListCacheStore<T> {
   /// Pass `null` to invalidate the "no-search" entries.
   void invalidateQuery(String? query);
 
+  /// Drop every entry matching [query], [filters], and optionally [listId].
+  void invalidateScope({
+    Object? listId,
+    String? query,
+    Map<String, Object?> filters = const {},
+  });
+
   /// Drop everything.
   void clear();
 }

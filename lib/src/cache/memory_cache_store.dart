@@ -63,7 +63,33 @@ class MemoryCacheStore<T> implements SmartListCacheStore<T> {
 
   @override
   void invalidateQuery(String? query) {
-    _entries.removeWhere((k, _) => k.query == query);
+    _removeKeysWhere((k) => k.query == query);
+  }
+
+  @override
+  void invalidateScope({
+    Object? listId,
+    String? query,
+    Map<String, Object?> filters = const {},
+  }) {
+    _removeKeysWhere((k) {
+      if (listId != null && k.listId != listId) return false;
+      if (k.query != query) return false;
+      if (k.filters.length != filters.length) return false;
+      for (final entry in filters.entries) {
+        if (k.filters[entry.key] != entry.value) return false;
+      }
+      return true;
+    });
+  }
+
+  /// Snapshot keys first — `LinkedHashMap.removeWhere` can throw when it
+  /// removes more than one entry during iteration.
+  void _removeKeysWhere(bool Function(SmartListCacheKey key) test) {
+    final keys = _entries.keys.where(test).toList();
+    for (final key in keys) {
+      _entries.remove(key);
+    }
   }
 
   @override

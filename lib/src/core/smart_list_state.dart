@@ -9,9 +9,10 @@ import 'smart_list_phase.dart';
 /// predictable rebuilds, and trivial debugging of state transitions.
 @immutable
 class SmartListState<T> {
-  /// All items currently held by the controller. When a search is active, this
-  /// list contains only the search results; the pre-search items are kept
-  /// separately by the controller and restored on `clearSearch`.
+  /// All items currently held by the controller. When a search is in flight,
+  /// this may still be the previous list until the search page arrives.
+  /// Pre-search items are kept separately by the controller and restored on
+  /// `clearSearch`.
   final List<T> items;
 
   /// Lifecycle phase. See [SmartListPhase].
@@ -31,7 +32,7 @@ class SmartListState<T> {
   final String? query;
 
   /// User-supplied filters that scope the fetch (e.g. `{status: 'open'}`).
-  final Map<String, dynamic> filters;
+  final Map<String, Object?> filters;
 
   /// Number of retry attempts made for the most recent fetch.
   final int retryAttempt;
@@ -77,6 +78,11 @@ class SmartListState<T> {
   /// `true` when a non-empty search query is active.
   bool get isSearchActive => query != null && query!.isNotEmpty;
 
+  /// Search is in flight while previous (or last) items may still be visible.
+  bool get isSearchLoading =>
+      isSearchActive &&
+      (phase == SmartListPhase.loading || phase == SmartListPhase.loadingMore);
+
   /// `true` when the empty result is specifically the result of a search.
   bool get isSearchEmpty => isEmpty && isSearchActive;
 
@@ -94,7 +100,7 @@ class SmartListState<T> {
     StackTrace? stackTrace,
     bool? hasReachedEnd,
     String? query,
-    Map<String, dynamic>? filters,
+    Map<String, Object?>? filters,
     int? retryAttempt,
     bool clearError = false,
     bool clearStackTrace = false,

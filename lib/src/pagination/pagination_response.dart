@@ -6,7 +6,9 @@ import 'package:flutter/foundation.dart';
 /// controller decide whether more pages exist:
 ///
 /// * [nextCursor] — for cursor-based pagination; `null` signals end-of-list.
-/// * [hasMore] — explicit override; takes precedence when provided.
+/// * [hasMore] — explicit override. `false` always means end-of-list.
+///   For cursor strategies, `true` still requires a non-null [nextCursor]
+///   or paging stops (a null cursor would otherwise re-request page 1).
 ///
 /// If neither is provided, the controller falls back to the heuristic
 /// "received fewer items than the requested page size → end of list".
@@ -19,8 +21,8 @@ class SmartListPage<T> {
   /// using cursor-based pagination.
   final String? nextCursor;
 
-  /// Explicit "are there more pages" signal. When non-null, this overrides
-  /// any inference from [items.length] or [nextCursor].
+  /// Explicit "are there more pages" signal. `false` always ends paging.
+  /// `true` does not override a missing [nextCursor] on cursor strategies.
   final bool? hasMore;
 
   /// Total count, when known. Purely informational; not used for paging.

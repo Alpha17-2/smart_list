@@ -26,7 +26,7 @@ class SmartListPageRequest {
   final String? query;
 
   /// User-applied filters, scoped to the request.
-  final Map<String, dynamic> filters;
+  final Map<String, Object?> filters;
 
   const SmartListPageRequest({
     required this.page,

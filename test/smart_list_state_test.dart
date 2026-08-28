@@ -28,6 +28,16 @@ void main() {
       expect(success.isEmpty, isTrue);
     });
 
+    test('isSearchLoading when searching while busy', () {
+      final s = SmartListState<int>(
+        items: const [1],
+        query: 'x',
+        phase: SmartListPhase.loading,
+      );
+      expect(s.isSearchLoading, isTrue);
+      expect(s.isInitialLoading, isFalse);
+    });
+
     test('isSearchActive ignores empty query', () {
       expect(SmartListState<int>(query: '').isSearchActive, isFalse);
       expect(SmartListState<int>(query: 'foo').isSearchActive, isTrue);

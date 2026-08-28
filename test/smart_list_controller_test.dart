@@ -12,10 +12,14 @@ class _FakeSource {
   int failuresLeft = 0;
   Duration latency = Duration.zero;
 
-  Future<SmartListPage<int>> fetch(SmartListPageRequest req) async {
+  Future<SmartListPage<int>> fetch(
+    SmartListPageRequest req,
+    SmartListCancelToken cancel,
+  ) async {
     callCount++;
     if (latency > Duration.zero) {
       await Future<void>.delayed(latency);
+      cancel.throwIfCancelled();
     }
     if (failuresLeft > 0) {
       failuresLeft--;
@@ -231,7 +235,7 @@ void main() {
       final c = SmartListController<int>(
         fetcher: src.fetch,
         strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 5),
-        retryPolicy: RetryPolicy(
+        retryPolicy: RetryPolicy.aggressive(
           maxAttempts: 3,
           baseDelay: const Duration(milliseconds: 1),
         ),
@@ -317,7 +321,7 @@ void main() {
   group('SmartListController — deduplication', () {
     test('uniqueKey collapses duplicates across pages', () async {
       // Source returns overlapping items deliberately.
-      Future<SmartListPage<int>> dupSource(SmartListPageRequest req) async {
+      Future<SmartListPage<int>> dupSource(SmartListPageRequest req, SmartListCancelToken cancel) async {
         if (req.page == 1) {
           return SmartListPage<int>(items: const [1, 2, 3], hasMore: true);
         }
@@ -359,12 +363,42 @@ void main() {
       expect(c.value.items, [1, 7, 3]);
       c.dispose();
     });
+
+    test('insertAtTop with uniqueKey replaces existing', () async {
+      final src = _FakeSource(totalItems: 3);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        uniqueKey: (i) => i,
+      );
+      await c.loadInitial();
+      c.insertAtTop(2);
+      expect(c.value.items, [2, 1, 3]);
+      c.dispose();
+    });
+
+    test('mutation invalidates cache for the current scope', () async {
+      final src = _FakeSource(totalItems: 3);
+      final cache = MemoryCacheStore<int>();
+      final c = SmartListController<int>(
+        fetcher: src.fetch,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        cache: cache,
+        uniqueKey: (i) => i,
+      );
+      await c.loadInitial();
+      c.insertAtTop(99);
+      await c.loadInitial(force: true);
+      expect(src.callCount, 2);
+      expect(c.value.items, isNot(contains(99)));
+      c.dispose();
+    });
   });
 
   group('SmartListController — filters', () {
     test('applyFilters resets and re-fetches', () async {
-      var receivedFilters = const <String, dynamic>{};
-      Future<SmartListPage<int>> src(SmartListPageRequest req) async {
+      var receivedFilters = <String, Object?>{};
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
         receivedFilters = req.filters;
         return SmartListPage<int>(items: const [1, 2], hasMore: false);
       }
@@ -382,6 +416,106 @@ void main() {
     });
   });
 
+  group('SmartListController — load-more failure', () {
+    test('retry after loadNextPage failure requests the same page', () async {
+      final pages = <int>[];
+      var failPage2Once = true;
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
+        pages.add(req.page);
+        if (req.page == 2 && failPage2Once) {
+          failPage2Once = false;
+          throw StateError('page 2 failed');
+        }
+        final start = (req.page - 1) * req.pageSize;
+        final items = [for (var i = 1; i <= req.pageSize; i++) start + i];
+        return SmartListPage<int>(items: items, hasMore: req.page < 3);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 3),
+        retryPolicy: RetryPolicy.none(),
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+      await c.loadNextPage();
+      expect(c.value.phase, SmartListPhase.error);
+      await c.loadNextPage();
+      expect(c.value.phase, SmartListPhase.success);
+      expect(c.value.items, [1, 2, 3, 4, 5, 6]);
+      expect(pages, [1, 2, 2]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — refresh cache isolation', () {
+    test('refresh then loadNextPage does not append a stale cached page',
+        () async {
+      var generation = 1;
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
+        final start = (req.page - 1) * 2;
+        final items = [
+          for (var i = 1; i <= 2; i++) generation * 100 + start + i,
+        ];
+        return SmartListPage<int>(items: items, hasMore: req.page == 1);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 2),
+        cache: MemoryCacheStore<int>(),
+      );
+      await c.loadInitial();
+      await c.loadNextPage();
+      expect(c.value.items, [101, 102, 103, 104]);
+
+      generation = 2;
+      await c.refresh();
+      expect(c.value.items, [201, 202]);
+      await c.loadNextPage();
+      expect(c.value.items, [201, 202, 203, 204]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — filters during search', () {
+    test('clearSearch after applyFilters refetches browse', () async {
+      Future<SmartListPage<int>> src(SmartListPageRequest req, SmartListCancelToken cancel) async {
+        if (req.filters['status'] == 'open') {
+          return const SmartListPage(items: [10, 20], hasMore: false);
+        }
+        if (req.query != null) {
+          return const SmartListPage(items: [1], hasMore: false);
+        }
+        return const SmartListPage(items: [1, 2, 3], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: Duration.zero,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      expect(c.value.items, [1, 2, 3]);
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(c.value.isSearchActive, isTrue);
+      await c.applyFilters({'status': 'open'});
+      expect(c.value.isSearchActive, isTrue);
+      expect(c.value.items, [10, 20]);
+
+      c.clearSearch();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(c.value.isSearchActive, isFalse);
+      expect(c.value.filters, {'status': 'open'});
+      expect(c.value.items, [10, 20]);
+      expect(c.value.query, isNull);
+      c.dispose();
+    });
+  });
+
   group('SmartListController — disposal', () {
     test('post-dispose calls are silent no-ops', () async {
       final src = _FakeSource(totalItems: 3);
@@ -395,6 +529,114 @@ void main() {
       await c.refresh();
       c.search('x');
       c.clearSearch();
+    });
+
+    test('dispose during in-flight fetch does not throw', () async {
+      final src = _FakeSource(totalItems: 3);
+      src.latency = const Duration(milliseconds: 50);
+      final c = SmartListController<int>.simple(
+        fetcher: src.fetch,
+        pageSize: 10,
+        enableCache: false,
+      );
+      final pending = c.loadInitial();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      c.dispose();
+      await pending;
+    });
+
+    test('cancelled fetch does not enter error', () async {
+      var cancelled = false;
+      Future<SmartListPage<int>> src(
+        SmartListPageRequest req,
+        SmartListCancelToken cancel,
+      ) async {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        try {
+          cancel.throwIfCancelled();
+        } on SmartListCancelledException {
+          cancelled = true;
+          rethrow;
+        }
+        return const SmartListPage(items: [1], hasMore: false);
+      }
+
+      final c = SmartListController<int>.simple(
+        fetcher: src,
+        pageSize: 10,
+        enableCache: false,
+      );
+      final first = c.loadInitial();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await c.refresh();
+      await first;
+      expect(cancelled, isTrue);
+      expect(c.value.phase, isNot(SmartListPhase.error));
+      expect(c.value.items, [1]);
+      c.dispose();
+    });
+  });
+
+  group('SmartListController — cache listId', () {
+    test('shared store does not cross-read different listIds', () async {
+      var n = 0;
+      Future<SmartListPage<int>> src(
+        SmartListPageRequest req,
+        SmartListCancelToken cancel,
+      ) async {
+        n++;
+        return SmartListPage<int>(items: [n], hasMore: false);
+      }
+
+      final store = MemoryCacheStore<int>();
+      final a = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        cache: store,
+        listId: 'list-a',
+      );
+      final b = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        cache: store,
+        listId: 'list-b',
+      );
+      await a.loadInitial();
+      await b.loadInitial();
+      expect(a.value.items, [1]);
+      expect(b.value.items, [2]);
+      a.dispose();
+      b.dispose();
+    });
+  });
+
+  group('SmartListController — search keeps items', () {
+    test('keeps previous items visible while search is in flight', () async {
+      Future<SmartListPage<int>> src(
+        SmartListPageRequest req,
+        SmartListCancelToken cancel,
+      ) async {
+        if (req.query != null) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          return const SmartListPage(items: [1], hasMore: false);
+        }
+        return const SmartListPage(items: [1, 2, 3], hasMore: false);
+      }
+
+      final c = SmartListController<int>(
+        fetcher: src,
+        strategyBuilder: () => PagePaginationStrategy<int>(pageSize: 10),
+        searchDebounce: Duration.zero,
+        enableCache: false,
+      );
+      await c.loadInitial();
+      c.search('1');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(c.value.items, [1, 2, 3]);
+      expect(c.value.isSearchLoading, isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(c.value.items, [1]);
+      c.dispose();
     });
   });
 }

@@ -1,6 +1,6 @@
 name: smart_list
 description: "Production-ready paginated lists for Flutter: search, pull-to-refresh, caching, retries, and customisable UI states — wired up in two lines."
-version: 0.0.1
+version: 1.0.0
 homepage: https://github.com/Alpha17-2/smart_list
 repository: https://github.com/Alpha17-2/smart_list
 issue_tracker: https://github.com/Alpha17-2/smart_list/issues

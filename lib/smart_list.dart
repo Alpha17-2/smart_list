@@ -6,7 +6,8 @@
 ///
 /// ```dart
 /// final controller = SmartListController.simple(
-///   fetcher: (req) async => SmartListPage(items: await api.fetch(req.page)),
+///   fetcher: (req, cancel) async =>
+///       SmartListPage(items: await api.fetch(req.page)),
 /// );
 ///
 /// SmartListView<Post>(
@@ -20,6 +21,7 @@ library;
 export 'src/core/smart_list_phase.dart';
 export 'src/core/smart_list_state.dart';
 export 'src/core/smart_list_exception.dart';
+export 'src/core/cancel_token.dart';
 export 'src/core/typedefs.dart';
 
 // Pagination
@@ -45,4 +47,5 @@ export 'src/controller/smart_list_controller.dart';
 
 // Widgets
 export 'src/widgets/smart_list_view.dart';
+export 'src/widgets/smart_list_sliver.dart';
 export 'src/widgets/default_state_builders.dart';

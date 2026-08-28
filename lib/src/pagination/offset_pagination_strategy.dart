@@ -15,7 +15,7 @@ class OffsetPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   @override
   SmartListPageRequest initialRequest({
     String? query,
-    Map<String, dynamic> filters = const {},
+    Map<String, Object?> filters = const {},
   }) {
     _nextOffset = 0;
     _nextPage = 1;
@@ -32,11 +32,9 @@ class OffsetPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
   SmartListPageRequest? nextRequest(
     SmartListPage<T> previousResponse, {
     String? query,
-    Map<String, dynamic> filters = const {},
+    Map<String, Object?> filters = const {},
   }) {
     if (isExhausted(previousResponse)) return null;
-    _nextOffset += previousResponse.items.length;
-    _nextPage += 1;
     return SmartListPageRequest(
       page: _nextPage,
       pageSize: pageSize,
@@ -44,6 +42,12 @@ class OffsetPaginationStrategy<T> implements SmartListPaginationStrategy<T> {
       query: query,
       filters: filters,
     );
+  }
+
+  @override
+  void commit(SmartListPageRequest request, SmartListPage<T> response) {
+    _nextOffset = request.offset + response.items.length;
+    _nextPage = request.page + 1;
   }
 
   @override

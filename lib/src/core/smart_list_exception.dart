@@ -1,6 +1,7 @@
-/// Sentinel error raised internally when an in-flight request is superseded
-/// by a newer one (e.g. user types a new query while the old one is still
-/// pending). Callers normally never see this — the controller swallows it.
+/// Raised when a fetch is superseded or the controller is disposed.
+///
+/// Fetchers should throw this from [SmartListCancelToken.throwIfCancelled]
+/// after an `await`. The controller swallows it and does not enter `error`.
 class SmartListCancelledException implements Exception {
   final String reason;
   const SmartListCancelledException([this.reason = 'cancelled']);
